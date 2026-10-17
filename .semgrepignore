@@ -1,0 +1,21 @@
+# Semgrep: caminhos fora da varredura. Com este arquivo presente, o Semgrep NÃO usa a lista
+# padrão dele; arquivos ignorados pelo .gitignore (node_modules, .next, coverage...) já ficam
+# de fora porque a varredura parte do git.
+
+# Fixtures de `semgrep --test`: contêm código vulnerável de propósito (as regras são testadas
+# por `semgrep --test .semgrep/rules` no CI).
+.semgrep/
+
+# Artefatos e dependências, caso a varredura rode fora de um checkout git.
+node_modules/
+.next/
+.turbo/
+dist/
+coverage/
+playwright-report/
+test-results/
+blob-report/
+
+# Gerados por ferramenta (revisados no PR que os altera).
+pnpm-lock.yaml
+packages/db/drizzle/meta/

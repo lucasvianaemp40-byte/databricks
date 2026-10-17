@@ -1,0 +1,28 @@
+# Regras do ZAP baseline (zap-baseline.py -c): ID<TAB>IGNORE|INFO|WARN|FAIL<TAB>(nome).
+# IDs e nomes conferidos em zaproxy/zaproxy-website (site/content/docs/alerts/<id>.md).
+# FAIL = controle que o app já implementa (cabeçalhos em next.config.ts e proxy.ts): regressão
+# derruba o job. WARN = em calibração ou dependente de HTTPS/cookies que ainda não existem.
+# Para gerar a lista completa de regras da versão do ZAP: cmd_options com -g gen.conf.
+10038	FAIL	(Content Security Policy (CSP) Header Not Set)
+10055	WARN	(CSP)
+10020	FAIL	(Anti-clickjacking Header)
+10021	FAIL	(X-Content-Type-Options Header Missing)
+10063	FAIL	(Permissions Policy Header Not Set)
+10037	FAIL	(Server Leaks Information via "X-Powered-By" HTTP Response Header Field(s))
+10036	WARN	(HTTP Server Response Header)
+10017	FAIL	(Cross-Domain JavaScript Source File Inclusion)
+10098	FAIL	(Cross-Domain Misconfiguration)
+90022	FAIL	(Application Error Disclosure)
+10062	FAIL	(PII Disclosure)
+10010	FAIL	(Cookie No HttpOnly Flag)
+10054	FAIL	(Cookie without SameSite Attribute)
+10011	WARN	(Cookie Without Secure Flag)
+10035	WARN	(Strict-Transport-Security Header)
+90004	WARN	(Insufficient Site Isolation Against Spectre Vulnerability)
+10015	WARN	(Re-examine Cache-control Directives)
+10202	WARN	(Absence of Anti-CSRF Tokens)
+10096	IGNORE	(Timestamp Disclosure - Unix)
+10027	IGNORE	(Information Disclosure - Suspicious Comments)
+10109	IGNORE	(Modern Web Application)
+10049	IGNORE	(Content Cacheability)
+10112	IGNORE	(Session Management Response Identified)

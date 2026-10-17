@@ -1,0 +1,75 @@
+# Server Action sem verificação de sessão/tenant (OWASP A01:2025 Broken Access Control).
+#
+# Toda função exportada de um arquivo 'use server' vira um endpoint HTTP público: qualquer
+# pessoa pode chamá-la com qualquer argumento, mesmo sem a tela que a usa. Convenção do projeto
+# (docs/seguranca/headers-e-csp.md e docs/seguranca/asvs-l2.md):
+#   1. preferir os clientes do next-safe-action de apps/web/src/server/safe-action.ts, que já
+#      verificam sessão, papel e tenant: tenantAction, ownerAction e, para a página pública de
+#      reserva, publicAction (com rate limit); o cliente base `actionClient` não autentica e
+#      não pode ser usado em arquivos 'use server';
+#   2. função exportada "à mão" precisa ter como PRIMEIRA instrução a guarda
+#      `await requireXxx(...)` (ex.: requireTenantSession), que lança se não houver sessão.
+# O tenantId sai do retorno da guarda, nunca dos argumentos da action.
+rules:
+  - id: server-action-auth
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      Server Action exportada sem verificar sessão/tenant na primeira instrução. Defina-a com
+      tenantAction/ownerAction (ou publicAction, se for de fato pública) de
+      @/server/safe-action, ou comece a função com `await requireTenantSession()` (ou outra
+      guarda requireXxx). O tenantId vem da sessão, nunca dos argumentos.
+    pattern-either:
+      # Função exportada à mão em arquivo 'use server'.
+      - patterns:
+          - pattern-inside: |
+              'use server';
+              ...
+          - pattern-either:
+              - pattern: |
+                  export async function $FN(...) { $...BODY }
+              - pattern: |
+                  export default async function $FN(...) { $...BODY }
+              - pattern: |
+                  export const $FN = async (...) => { $...BODY };
+              - pattern: |
+                  export const $FN = async function (...) { $...BODY };
+          - metavariable-pattern:
+              metavariable: $...BODY
+              language: generic
+              patterns:
+                - pattern-regex: (?s)\A.+
+                # Primeira instrução = guarda requireXxx (com ou sem atribuição do retorno).
+                - pattern-not-regex: \A\s*((const|let)\s+(\w+|\{[^}]*\})\s*=\s*)?await\s+require[A-Z]\w*\s*\(
+      # Server Action inline (dentro de componente) com 'use server' no corpo.
+      - patterns:
+          - pattern: |
+              async function $FN(...) { 'use server'; $...BODY }
+          - metavariable-pattern:
+              metavariable: $...BODY
+              language: generic
+              patterns:
+                - pattern-regex: (?s)\A.+
+                - pattern-not-regex: \A\s*((const|let)\s+(\w+|\{[^}]*\})\s*=\s*)?await\s+require[A-Z]\w*\s*\(
+      # Cliente base sem autenticação usado para definir action.
+      - patterns:
+          - pattern-inside: |
+              'use server';
+              ...
+          - pattern: export const $FN = $EXPR;
+          - metavariable-pattern:
+              metavariable: $EXPR
+              pattern: actionClient
+    metadata:
+      category: security
+      subcategory: [audit]
+      cwe:
+        - "CWE-862: Missing Authorization"
+      owasp:
+        - "A01:2025 - Broken Access Control"
+      confidence: MEDIUM
+      likelihood: HIGH
+      impact: HIGH
+      references:
+        - https://nextjs.org/docs/app/guides/data-security
+        - https://next-safe-action.dev/docs/define-actions/middleware

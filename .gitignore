@@ -1,2 +1,36 @@
 __pycache__/
 *.py[cod]
+
+# Node / pnpm / turbo
+node_modules/
+.pnpm-store/
+.turbo/
+*.tsbuildinfo
+
+# Next.js
+.next/
+out/
+next-env.d.ts
+
+# Testes e cobertura
+coverage/
+.vitest/
+playwright-report/
+blob-report/
+test-results/
+
+# Variáveis de ambiente (segredos nunca entram no git)
+.env*
+!.env.example
+
+# Saídas locais de ferramentas (Playwright CLI/MCP, scanners)
+.playwright-cli/
+*.sarif
+sbom.cdx.json
+
+# Configuração pessoal do Claude Code
+CLAUDE.local.md
+
+# Sistema operacional e editores
+.DS_Store
+*.log

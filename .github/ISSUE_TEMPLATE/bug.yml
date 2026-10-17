@@ -1,0 +1,64 @@
+name: Bug
+description: Algo não funciona como deveria.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado por relatar. **Falha de segurança ou exposição de dado pessoal não vai aqui**:
+        siga o [SECURITY.md](../blob/main/SECURITY.md) (relato privado).
+
+        Não cole dados reais de clientes (nome, telefone, e-mail, CPF) nem tokens, senhas ou
+        cookies. Use dados fictícios e oculte o que for preciso nos prints.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: O que aconteceu
+      description: Comportamento observado, com a mensagem de erro se houver.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: O que era esperado
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Passos para reproduzir
+      placeholder: |
+        1. Entrar como recepcionista do salão X
+        2. Abrir a agenda de amanhã
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Área
+      options:
+        - Página pública de agendamento
+        - Painel do salão (agenda, clientes, serviços)
+        - Disponibilidade de horários
+        - Notificações
+        - Outra
+    validations:
+      required: true
+  - type: input
+    id: timezone
+    attributes:
+      label: Fuso horário da unidade e do dispositivo
+      description: Erros de horário quase sempre dependem disso.
+      placeholder: "Unidade: America/Sao_Paulo; celular: America/Manaus"
+  - type: input
+    id: environment
+    attributes:
+      label: Ambiente
+      placeholder: "produção / preview; Chrome 141 no Android 15"
+  - type: textarea
+    id: extra
+    attributes:
+      label: Informações adicionais
+      description: Prints (sem dados reais), horário aproximado em que ocorreu, ID da requisição.

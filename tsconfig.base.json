@@ -1,0 +1,37 @@
+// Base do monorepo: TypeScript 6, já compatível com o 7 (sem baseUrl, moduleResolution Bundler).
+// No TS 6, "types" é [] por padrão e "noUncheckedSideEffectImports" é true: cada pacote declara
+// os próprios "types" e "lib". Pacotes internos exportam o fonte .ts (sem build).
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "target": "ES2024",
+    "lib": [
+      "ES2024"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "moduleDetection": "force",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    // Só sintaxe apagável (sem enum/namespace/parameter properties): o fonte roda com
+    // type stripping do Node e passa por qualquer transpilador sem semântica extra.
+    "erasableSyntaxOnly": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "noUncheckedSideEffectImports": true
+  }
+}

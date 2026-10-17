@@ -1,0 +1,17 @@
+# OSV-Scanner (security.yml, passado com --config). Espelha o `audit.ignore` do
+# pnpm-workspace.yaml: todo risco aceito aparece nos DOIS lugares, com a mesma justificativa
+# e prazo de revisão. Ao vencer o `ignoreUntil`, o scan volta a falhar e obriga a reavaliar.
+
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+ignoreUntil = 2027-01-15T00:00:00Z
+reason = """braces <=3.0.3: DoS por padrão glob profundamente aninhado, sem versão corrigida. \
+Só chega via @next/eslint-plugin-next > fast-glob (devDependency de lint); os padrões vêm do \
+próprio repositório, nunca de usuário."""
+
+[[IgnoredVulns]]
+id = "GHSA-67mh-4wv8-2f99"
+ignoreUntil = 2027-01-15T00:00:00Z
+reason = """esbuild <=0.24.2: CORS do servidor de desenvolvimento (`esbuild serve`). Só chega \
+via drizzle-kit > @esbuild-kit/core-utils (0.18.20, devDependency), que usa apenas a API de \
+transform; nenhum servidor do esbuild é iniciado."""

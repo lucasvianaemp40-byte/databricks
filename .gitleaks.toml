@@ -1,0 +1,119 @@
+# gitleaks 8.30.x. Estende as ~220 regras padrão (inclusive a allowlist global de lockfiles,
+# node_modules e binários) com regras do produto: dado pessoal brasileiro (LGPD) e credenciais
+# dos provedores das próximas iterações (Mercado Pago/Pix, WhatsApp Cloud API) e do banco.
+#
+# - As regras de CPF/CNPJ são HEURÍSTICAS: pegam documento formatado em código, seed ou
+#   fixture. Dado real de cliente nunca entra no repositório; em teste, use os valores
+#   sintéticos da allowlist abaixo ou gere com fast-check sem formatar.
+# - Autoteste das regras próprias: .github/scripts/gitleaks-selftest.sh (roda no CI antes da
+#   varredura e monta os exemplos em tempo de execução, sem segredo de exemplo no repositório).
+# - Achado falso positivo pontual: comentário `gitleaks:allow` na linha, com justificativa no PR.
+title = "Agenda Salão"
+
+[extend]
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# LGPD: documentos de pessoa física e jurídica
+# ---------------------------------------------------------------------------
+
+[[rules]]
+id = "br-cpf"
+description = "CPF formatado (possível dado pessoal real em código, seed, fixture ou log)"
+regex = '''\b\d{3}\.\d{3}\.\d{3}-\d{2}\b'''
+tags = ["pii", "lgpd"]
+
+[[rules]]
+id = "br-cnpj"
+# CNPJ alfanumérico (IN RFB 2.229/2024, em vigor desde jul/2026): as 12 primeiras posições
+# aceitam letras maiúsculas; os 2 dígitos verificadores continuam numéricos.
+description = "CNPJ formatado, numérico ou alfanumérico (identifica salão ou profissional MEI)"
+regex = '''\b[0-9A-Z]{2}\.[0-9A-Z]{3}\.[0-9A-Z]{3}/[0-9A-Z]{4}-\d{2}\b'''
+tags = ["pii", "lgpd"]
+
+# ---------------------------------------------------------------------------
+# Provedores (heurísticas; os formatos podem mudar, revisar quando a integração chegar)
+# ---------------------------------------------------------------------------
+
+[[rules]]
+id = "mercadopago-access-token"
+description = "Access token do Mercado Pago (produção APP_USR- ou sandbox TEST-)"
+regex = '''\b((?:APP_USR|TEST)-\d{10,20}-\d{6}-[0-9a-f]{32}-\d{6,12})\b'''
+keywords = ["app_usr-", "test-"]
+tags = ["payment", "pix"]
+
+[[rules]]
+id = "mercadopago-webhook-secret"
+description = "Segredo de assinatura de webhook do Mercado Pago (x-signature)"
+regex = '''(?i)(?:mercado[_.-]?pago|\bmp)[_.-]?(?:webhook[_.-]?)?(?:secret|signature[_.-]?key)\s*(?:=|:|:=|=>)\s*['"\x60]?([0-9a-f]{32,128})\b'''
+keywords = ["mercado", "mp_", "mp-", "mp."]
+tags = ["payment", "webhook"]
+
+[[rules]]
+id = "meta-whatsapp-access-token"
+# Tokens de usuário de sistema/app da Meta começam com EAA. A regra padrão
+# facebook-page-access-token só cobre EAAM/EAAC; a WhatsApp Cloud API usa outros prefixos.
+description = "Access token da Meta (WhatsApp Cloud API / Graph API)"
+regex = '''\b(EAA[A-Za-z0-9]{90,})\b'''
+entropy = 4
+keywords = ["eaa"]
+tags = ["messaging", "whatsapp"]
+
+[[rules]]
+id = "whatsapp-app-secret"
+description = "App secret ou verify token de webhook do WhatsApp/Meta atribuído no código"
+regex = '''(?i)(?:whatsapp|wa|meta)[_.-]?(?:app[_.-]?secret|webhook[_.-]?(?:secret|verify[_.-]?token)|verify[_.-]?token)\s*(?:=|:|:=|=>)\s*['"\x60]?([A-Za-z0-9_\-]{16,128})\b'''
+entropy = 3.5
+keywords = ["whatsapp", "wa_", "wa-", "meta"]
+tags = ["messaging", "webhook"]
+
+[[rules]]
+id = "postgres-url-with-password"
+description = "URL de PostgreSQL com senha (Neon, RDS, Supabase...): credencial de banco"
+regex = '''\bpostgres(?:ql)?://[^:@/\s'"]+:([^@/\s'"]{6,})@[^\s'"]+'''
+keywords = ["postgres://", "postgresql://"]
+tags = ["database"]
+
+  # Banco local/efêmero de teste e placeholders de documentação não são segredo.
+  [[rules.allowlists]]
+  description = "Hosts locais (CI com serviço postgres, cluster efêmero) e placeholders"
+  regexTarget = "match"
+  regexes = [
+    '''@(?:localhost|127\.0\.0\.1|\[::1\]|postgres)(?::\d+)?/''',
+    '''://[^:]+:<[^>]+>@''',
+    '''://[^:]+:\$\{?[A-Za-z_]+\}?@''',
+  ]
+
+# ---------------------------------------------------------------------------
+# Allowlists globais
+# ---------------------------------------------------------------------------
+
+[[allowlists]]
+description = "CPF/CNPJ sintéticos usados em testes e documentação"
+targetRules = ["br-cpf", "br-cnpj"]
+regexTarget = "match"
+regexes = [
+  # RE2 (Go) não tem backreference: lista explícita dos dígitos repetidos.
+  '''^(?:000\.000\.000-00|111\.111\.111-11|222\.222\.222-22|333\.333\.333-33|444\.444\.444-44|555\.555\.555-55|666\.666\.666-66|777\.777\.777-77|888\.888\.888-88|999\.999\.999-99)$''',
+  '''^123\.456\.789-09$''',
+  '''^(?:00\.000\.000/0000-00|11\.111\.111/1111-11|11\.222\.333/0001-81)$''',
+  # Exemplo oficial de CNPJ alfanumérico da Receita Federal.
+  '''^12\.ABC\.345/01DE-35$''',
+]
+
+[[allowlists]]
+description = "Fixtures de teste podem ter documento formatado (nunca de pessoa real)"
+targetRules = ["br-cpf", "br-cnpj"]
+paths = [
+  '''(?:^|/)(?:test|tests|__tests__|__fixtures__|fixtures|e2e)/''',
+  '''\.(?:test|spec|prop\.test|int\.test|rls\.test)\.tsx?$''',
+]
+
+[[allowlists]]
+description = "Arquivos gerados por ferramenta (revisados no PR que os altera)"
+paths = [
+  '''(?:^|/)pnpm-lock\.yaml$''',
+  '''(?:^|/)packages/db/drizzle/meta/[^/]+\.json$''',
+  '''(?:^|/)\.next/''',
+  '''(?:^|/)(?:coverage|playwright-report|test-results|blob-report)/''',
+]

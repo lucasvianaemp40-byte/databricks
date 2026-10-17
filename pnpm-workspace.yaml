@@ -1,0 +1,124 @@
+# Workspace pnpm 11. A partir do pnpm 11, o .npmrc só é lido para autenticação e
+# registry; toda outra configuração fica neste arquivo. Nunca versione credenciais.
+packages:
+  - apps/*
+  - packages/*
+
+# ---------------------------------------------------------------------------
+# Defesa de cadeia de suprimentos
+# ---------------------------------------------------------------------------
+
+# Quarentena: só aceita versões publicadas há pelo menos 3 dias (em minutos),
+# inclusive transitivas. A maioria dos pacotes maliciosos de 2025-2026 (chalk/debug,
+# axios, TanStack) foi retirada do registry em horas.
+minimumReleaseAge: 4320
+# Falha em vez de cair silenciosamente para outra versão quando a pedida é nova demais.
+minimumReleaseAgeStrict: true
+# Exceções pontuais (ex.: hotfix de segurança do Next.js). Cada entrada exige
+# justificativa no PR; o Renovate insere aqui em PRs de vulnerabilidade.
+minimumReleaseAgeExclude: []
+minimumReleaseAgeExcludePrune: true
+
+# Falha se o nível de confiança de um pacote (trusted publisher > provenance > nada)
+# cair em relação às versões anteriores: sinal típico de conta sequestrada.
+trustPolicy: no-downgrade
+trustPolicyExclude:
+  # Backport do fix de ReDoS (CVE-2022-25883) na linha 6.x, publicado à mão por um
+  # mantenedor do npm CLI em 2023-07-10, depois de 7.5.x com provenance automática.
+  # Legítimo; vem de @babel/core (via eslint-plugin-react-hooks). Só esta versão.
+  - 'semver@6.3.1'
+trustPolicyExcludePrune: true
+
+# Dependências transitivas não podem vir de git ou URL de tarball.
+blockExoticSubdeps: true
+
+# Scripts de instalação de dependências são negados por padrão. Todo pacote com
+# script de build precisa constar abaixo com decisão explícita; pacote novo com
+# script faz o install falhar até alguém revisar. NUNCA use dangerouslyAllowAllBuilds.
+strictDepBuilds: true
+allowBuilds:
+  # postinstall (install.js) só valida/otimiza o binário. O binário nativo já chega
+  # pelo optionalDependency @esbuild/<plataforma>, que o JS do esbuild resolve
+  # sozinho; tsx e drizzle-kit funcionam sem o script (verificado no install).
+  esbuild: false
+  # postinstall roda "lefthook install" e reescreve .git/hooks em todo install.
+  # A instalação dos hooks é um passo explícito: pnpm hooks:install.
+  # O binário vem por optionalDependency (lefthook-<plataforma>).
+  lefthook: false
+
+# Advisories aceitos (pnpm audit). Cada entrada precisa de justificativa e some
+# sozinha (ignorePrune) quando o pacote afetado deixa a árvore.
+audit:
+  ignore:
+    # braces <=3.0.3, DoS por padrões glob profundamente aninhados, sem versão
+    # corrigida. Só chega via @next/eslint-plugin-next > fast-glob (ferramenta de
+    # lint, devDependency); os padrões vêm do nosso repositório, nunca de usuário.
+    - GHSA-vfj7-8cjw-p6xm
+    # esbuild <=0.24.2, CORS do servidor de desenvolvimento (`esbuild serve`). Só
+    # chega via drizzle-kit > @esbuild-kit/core-utils (0.18.20, devDependency), que
+    # usa apenas a API de transform; nenhum servidor do esbuild é iniciado.
+    - GHSA-67mh-4wv8-2f99
+  ignorePrune: true
+
+# ---------------------------------------------------------------------------
+# Reprodutibilidade e consistência
+# ---------------------------------------------------------------------------
+saveExact: true
+engineStrict: true
+strictPeerDependencies: true
+# "prefer": `pnpm add <pkg>` usa a versão do catálogo quando o pacote está nele;
+# pacote fora do catálogo entra com versão exata (consolide no catálogo depois).
+catalogMode: prefer
+
+# Versões únicas para o monorepo inteiro (referenciadas como "catalog:").
+# Ao atualizar, respeite a quarentena: `npm view <pkg> time --json`.
+catalog:
+  # --- runtime do app web ---
+  next: 16.4.0
+  react: 19.3.0
+  react-dom: 19.3.0
+  zod: 4.6.7
+  '@t3-oss/env-nextjs': 0.13.11
+  # --- domínio ---
+  temporal-polyfill: 1.0.6
+  # --- dados ---
+  drizzle-orm: 0.45.4
+  pg: 8.23.1
+  uuid: 14.0.3
+  # --- UI ---
+  tailwindcss: 4.3.3
+  '@tailwindcss/postcss': 4.3.3
+  postcss: 8.5.30
+  # --- tipos ---
+  typescript: 6.0.3
+  '@types/node': 24.19.2
+  '@types/react': 19.3.0
+  '@types/react-dom': 19.3.0
+  '@types/pg': 8.23.1
+  # --- ferramentas de dados ---
+  drizzle-kit: 0.31.11
+  tsx: 4.23.15
+  # --- testes ---
+  vitest: 5.0.4
+  '@vitest/coverage-v8': 5.0.4
+  fast-check: 4.10.2
+  '@fast-check/vitest': 0.5.0
+  '@playwright/test': 1.64.0
+  '@axe-core/playwright': 4.13.0
+  # --- lint/format ---
+  '@biomejs/biome': 2.5.15
+  eslint: 10.12.0
+  '@eslint/js': 10.0.1
+  typescript-eslint: 8.71.2
+  eslint-plugin-security: 4.2.0
+  '@next/eslint-plugin-next': 16.4.0
+  eslint-plugin-react-hooks: 7.1.1
+  globals: 17.13.0
+  # --- monorepo e higiene ---
+  turbo: 2.11.8
+  # 2.2.2 foi publicado sem trusted publisher/provenance (2.2.0 e 2.2.1 têm):
+  # rejeitado pelo trustPolicy no-downgrade. Reavaliar na próxima release.
+  lefthook: 2.2.1
+  '@commitlint/cli': 21.2.3
+  '@commitlint/config-conventional': 21.2.3
+  knip: 6.41.0

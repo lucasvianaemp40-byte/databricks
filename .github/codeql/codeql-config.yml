@@ -1,0 +1,16 @@
+# Configuração do CodeQL (codeql.yml). `security-extended` = consultas padrão + consultas de
+# segurança de precisão menor (mais achados, alguns falsos positivos).
+name: agenda-salao-codeql
+
+queries:
+  - uses: security-extended
+
+paths-ignore:
+  - "**/node_modules/**"
+  - "**/.next/**"
+  - "**/dist/**"
+  - "**/coverage/**"
+  - "**/playwright-report/**"
+  - "**/test-results/**"
+  # Fixtures de `semgrep --test`: código vulnerável de propósito.
+  - ".semgrep/**"

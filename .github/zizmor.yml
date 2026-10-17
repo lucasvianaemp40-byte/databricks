@@ -1,0 +1,11 @@
+# Configuração do zizmor (descoberta automática em .github/zizmor.yml). O CI roda a persona
+# `regular` com severidade mínima `low`: todo achado bloqueia, salvo o que está justificado aqui.
+rules:
+  # Sintaxe "self-repository" (`uses: $/.github/actions/setup`, GitHub, jul/2026). Ainda NÃO
+  # adotada: o actionlint 1.7.12 rejeita `$/` ("ref is missing") e deixaria de validar as
+  # entradas da ação composta. O risco que a regra cobre (ação local trocada no disco por um
+  # passo anterior) não se aplica aqui: `./.github/actions/setup` sempre vem logo depois do
+  # actions/checkout do próprio commit, sem passo intermediário que escreva no workspace.
+  # Reativar quando o actionlint suportar `$/` e migrar todos os `uses: ./`.
+  self-repository:
+    disable: true

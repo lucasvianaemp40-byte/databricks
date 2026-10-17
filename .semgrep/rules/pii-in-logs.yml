@@ -1,0 +1,65 @@
+# Dado pessoal em log (LGPD: minimização e segurança, Art. 6º III e VII; ASVS 16.2.5).
+#
+# Logs, Sentry e analytics recebem IDs opacos (tenantId, customerId, appointmentId), nunca
+# nome, telefone, e-mail, CPF/CNPJ, data de nascimento, endereço, observações de atendimento,
+# tokens ou senhas. Registro inteiro de cliente/usuário também conta como dado pessoal.
+#
+# "name" sozinho é ambíguo (err.name, service.name, job.name): só conta quando o objeto é
+# uma pessoa (customer, user, staff, professional...).
+rules:
+  - id: pii-in-logs
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Possível dado pessoal ou segredo ('$FIELD') enviado para log. Pela LGPD, registre só IDs
+      opacos (tenantId, customerId, appointmentId) e o motivo do evento. Se precisar correlacionar
+      um titular, use o ID dele.
+    patterns:
+      - pattern-either:
+          # Campos inequivocamente pessoais/sensíveis, em qualquer forma de argumento.
+          - patterns:
+              - pattern-either:
+                  - pattern: $LOGGER.$LEVEL(..., $OBJ.$FIELD, ...)
+                  - pattern: $LOGGER.$LEVEL(..., `...${$OBJ.$FIELD}...`, ...)
+                  - pattern: '$LOGGER.$LEVEL(..., {..., $KEY: <... $OBJ.$FIELD ...>, ...}, ...)'
+                  - pattern: '$LOGGER.$LEVEL(..., {..., $FIELD: $VALUE, ...}, ...)'
+                  - pattern: '$LOGGER.$LEVEL(..., {..., $FIELD, ...}, ...)'
+                  - pattern: $LOGGER.$LEVEL(..., $FIELD, ...)
+                  - pattern: $LOGGER.$LEVEL(..., `...${$FIELD}...`, ...)
+              - metavariable-regex:
+                  metavariable: $FIELD
+                  regex: (?i)^(cpf|cnpj|rg|phone|phones|phonenumber|phonee164|mobile|telefone|celular|whatsapp|email|emails|e_mail|emailaddress|fullname|firstname|lastname|nome|nomecompleto|birthdate|birthday|datanascimento|address|endereco|notes|observacoes|anamnese|customer|customers|cliente|clientes|user|password|senha|token|accesstoken|refreshtoken|secret|apikey)$
+              # Nome de evento/serviço/job em literal não é dado pessoal: { email: 'desligado' }.
+              - pattern-not: '$LOGGER.$LEVEL(..., {..., $FIELD: "...", ...}, ...)'
+          # "name" de uma pessoa.
+          - patterns:
+              - pattern-either:
+                  - pattern: $LOGGER.$LEVEL(..., $OBJ.$FIELD, ...)
+                  - pattern: $LOGGER.$LEVEL(..., `...${$OBJ.$FIELD}...`, ...)
+                  - pattern: '$LOGGER.$LEVEL(..., {..., $KEY: <... $OBJ.$FIELD ...>, ...}, ...)'
+              - metavariable-regex:
+                  metavariable: $FIELD
+                  regex: ^(name|displayName|socialName)$
+              - metavariable-regex:
+                  metavariable: $OBJ
+                  regex: (?i)^(.*\.)?(customer|cliente|client|user|usuario|staff|professional|profissional|member|owner|dono|person|pessoa|contact|contato|titular|recipient|guest)s?$
+      - metavariable-regex:
+          metavariable: $LOGGER
+          # console, logger, log, this.logger, ctx.log, requestLogger...
+          # (metavariable-regex é ancorado no início: daí o ^(.*\.)?)
+          regex: (?i)^(.*\.)?(console|log|logger|\w*logger)$
+      - metavariable-regex:
+          metavariable: $LEVEL
+          regex: ^(log|info|warn|error|debug|trace|fatal|dir|table)$
+    metadata:
+      category: security
+      subcategory: [audit]
+      cwe:
+        - "CWE-532: Insertion of Sensitive Information into Log File"
+      owasp:
+        - "A09:2025 - Security Logging and Alerting Failures"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://www.planalto.gov.br/ccivil_03/_ato2015-2018/2018/lei/l13709.htm

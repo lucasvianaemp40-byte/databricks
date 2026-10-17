@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(pnpm verify)",
+      "Bash(pnpm test)",
+      "Bash(pnpm test -- *)",
+      "Bash(pnpm test:db)",
+      "Bash(pnpm test:db -- *)",
+      "Bash(pnpm test:hooks)",
+      "Bash(pnpm e2e)",
+      "Bash(pnpm e2e -- *)",
+      "Bash(pnpm lint)",
+      "Bash(pnpm lint:fix)",
+      "Bash(pnpm typecheck)",
+      "Bash(pnpm build)",
+      "Bash(pnpm format)",
+      "Bash(pnpm format:check)",
+      "Bash(pnpm knip)",
+      "Bash(pnpm exec tsc -p .claude/hooks)",
+      "Bash(pnpm --filter @salon/scheduling-core test)",
+      "Bash(pnpm --filter @salon/scheduling-core test -- *)",
+      "Bash(pnpm --filter @salon/scheduling-core typecheck)",
+      "Bash(pnpm --filter @salon/scheduling-core lint)",
+      "Bash(pnpm --filter @salon/db test)",
+      "Bash(pnpm --filter @salon/db test -- *)",
+      "Bash(pnpm --filter @salon/db test:db)",
+      "Bash(pnpm --filter @salon/db test:db -- *)",
+      "Bash(pnpm --filter @salon/db typecheck)",
+      "Bash(pnpm --filter @salon/db lint)",
+      "Bash(pnpm --filter @salon/db check:migrations)",
+      "Bash(pnpm --filter @salon/web test)",
+      "Bash(pnpm --filter @salon/web test -- *)",
+      "Bash(pnpm --filter @salon/web typecheck)",
+      "Bash(pnpm --filter @salon/web lint)",
+      "Bash(pnpm --filter @salon/web build)",
+      "Bash(pnpm --filter @salon/web e2e)",
+      "Bash(pnpm --filter @salon/web e2e -- *)",
+      "Bash(git status)",
+      "Bash(git status *)",
+      "Bash(git diff)",
+      "Bash(git diff *)",
+      "Bash(git log)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git blame *)",
+      "Bash(git branch --show-current)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr diff *)",
+      "Bash(gh pr checks *)",
+      "Bash(gh run view *)"
+    ],
+    "ask": [
+      "Bash(pnpm add *)",
+      "Bash(pnpm remove *)",
+      "Bash(pnpm rm *)",
+      "Bash(pnpm update *)",
+      "Bash(pnpm up *)",
+      "Bash(pnpm dlx *)",
+      "Bash(pnpm approve-builds *)",
+      "Bash(pnpm --filter @salon/db migrate *)",
+      "Bash(npx *)",
+      "Bash(npm install *)",
+      "Bash(npm i *)",
+      "Bash(npm publish *)",
+      "Bash(git push --force-with-lease *)",
+      "Bash(git reset --hard *)",
+      "Bash(git clean *)",
+      "Bash(gh pr merge *)",
+      "Bash(gh release *)",
+      "Bash(gh secret *)",
+      "Bash(gh variable *)",
+      "Bash(gh workflow run *)",
+      "Bash(vercel *)",
+      "Bash(docker push *)",
+      "Edit(/.claude/settings.json)",
+      "Edit(/.claude/settings.local.json)",
+      "Edit(/.claude/hooks/**)",
+      "Edit(/.mcp.json)",
+      "Edit(/lefthook.yml)",
+      "Edit(**/drizzle/meta/_journal.json)"
+    ],
+    "deny": [
+      "Read(.env*)",
+      "Read(!.env.example)",
+      "Edit(.env*)",
+      "Edit(!.env.example)",
+      "Read(**/.envrc)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(**/*.p12)",
+      "Read(**/*.pfx)",
+      "Read(**/*.jks)",
+      "Read(**/id_rsa)",
+      "Read(**/id_ecdsa)",
+      "Read(**/id_ed25519)",
+      "Read(**/credentials.json)",
+      "Read(**/service-account*.json)",
+      "Read(**/secrets/**)",
+      "Read(**/terraform.tfstate)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.gnupg/**)",
+      "Read(~/.kube/**)",
+      "Read(~/.azure/**)",
+      "Read(~/.config/gh/**)",
+      "Read(~/.config/gcloud/**)",
+      "Read(~/.docker/config.json)",
+      "Read(~/.git-credentials)",
+      "Read(~/.npmrc)",
+      "Read(~/.netrc)",
+      "Read(~/.pgpass)",
+      "Read(~/.claude/.credentials.json)",
+      "Read(//proc/*/environ)",
+      "Edit(**/pnpm-lock.yaml)",
+      "Edit(**/package-lock.json)",
+      "Edit(**/yarn.lock)",
+      "Bash(sudo *)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git commit --no-verify *)",
+      "Bash(git credential *)",
+      "Bash(printenv)",
+      "Bash(env)",
+      "Bash(export -p)",
+      "Bash(gh auth token *)",
+      "Bash(claude --dangerously-skip-permissions *)"
+    ]
+  },
+  "env": {
+    "TZ": "UTC",
+    "TURBO_TELEMETRY_DISABLED": "1",
+    "NEXT_TELEMETRY_DISABLED": "1",
+    "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0"
+  },
+  "enabledMcpjsonServers": [
+    "playwright"
+  ],
+  "extraKnownMarketplaces": {
+    "claude-plugins-official": {
+      "source": {
+        "source": "github",
+        "repo": "anthropics/claude-plugins-official"
+      }
+    },
+    "trailofbits": {
+      "source": {
+        "source": "github",
+        "repo": "trailofbits/skills"
+      },
+      "autoUpdate": false
+    }
+  },
+  "enabledPlugins": {
+    "security-guidance@claude-plugins-official": true,
+    "claude-security@claude-plugins-official": true,
+    "pr-review-toolkit@claude-plugins-official": true,
+    "typescript-lsp@claude-plugins-official": true,
+    "claude-md-management@claude-plugins-official": true,
+    "insecure-defaults@trailofbits": true,
+    "static-analysis@trailofbits": true,
+    "supply-chain-risk-auditor@trailofbits": true,
+    "variant-analysis@trailofbits": true
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/session-start.sh"
+            ],
+            "timeout": 600,
+            "statusMessage": "Preparando dependências (sessão na nuvem)"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-prompt.mjs"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-bash.mjs"
+            ],
+            "timeout": 15,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Edit|Write|MultiEdit|NotebookEdit|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-files.mjs"
+            ],
+            "timeout": 15,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/post-edit-quality.mjs"
+            ],
+            "timeout": 120,
+            "statusMessage": "Biome + ESLint no arquivo editado"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/stop-typecheck.mjs"
+            ],
+            "timeout": 300,
+            "statusMessage": "Typecheck dos pacotes alterados"
+          }
+        ]
+      }
+    ]
+  }
+}

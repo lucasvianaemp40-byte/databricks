@@ -1,0 +1,62 @@
+# Query Drizzle em tabela de tenant fora de withTenant (isolamento multi-tenant, ASVS 8.4.1).
+#
+# withTenant(db, tenantId, fn) abre a transação e define app.tenant_id: sem ele a RLS devolve
+# 0 linhas (leitura) ou recusa a escrita, e o erro só aparece em produção. Repositórios que
+# recebem a transação pronta tipam o parâmetro como TenantTransaction (exportado por
+# @salon/db) e só podem ser chamados de dentro de withTenant.
+#
+# Fora do escopo: o próprio pacote de dados (implementação de withTenant, runner de migração)
+# e os testes de integração/RLS, que montam contexto à mão de propósito.
+rules:
+  - id: drizzle-tenant-scope
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      Query na tabela de tenant '$TABLE' fora de withTenant(). Toda leitura/escrita de dados de
+      salão passa por withTenant(db, session.tenantId, (tx) => ...) ou por função que recebe
+      `tx: TenantTransaction`; a RLS é a segunda linha de defesa, não a única.
+    paths:
+      include:
+        - /apps/
+        - /packages/
+      exclude:
+        - /packages/db/src/
+        - /packages/db/test/
+        - "*.test.ts"
+        - "*.spec.ts"
+    patterns:
+      - pattern-either:
+          - pattern: $DB.select(...).from($TABLE)
+          - pattern: $DB.selectDistinct(...).from($TABLE)
+          - pattern: $DB.selectDistinctOn(...).from($TABLE)
+          - pattern: $DB.insert($TABLE)
+          - pattern: $DB.update($TABLE)
+          - pattern: $DB.delete($TABLE)
+          - pattern: $DB.$count($TABLE, ...)
+          - pattern: $DB.query.$TABLE.$METHOD(...)
+      - metavariable-regex:
+          metavariable: $TABLE
+          # Tabelas do schema `app` (packages/db/src/schema). metavariable-regex é ancorado no
+          # início: o prefixo opcional cobre `schema.customers`.
+          regex: ^(\w+\.)?(tenants|locations|staff|services|staffServices|workingHours|timeOff|customers|appointments|appointmentItems|occupancies|appointmentEvents)$
+      - pattern-not-inside: withTenant($DB2, $TENANT, ...)
+      - pattern-not-inside: |
+          function $FN(..., $TX: TenantTransaction, ...) { ... }
+      - pattern-not-inside: |
+          async function $FN(..., $TX: TenantTransaction, ...) { ... }
+      - pattern-not-inside: |
+          (..., $TX: TenantTransaction, ...) => $BODY
+      - pattern-not-inside: |
+          async (..., $TX: TenantTransaction, ...) => $BODY
+    metadata:
+      category: security
+      subcategory: [audit]
+      cwe:
+        - "CWE-639: Authorization Bypass Through User-Controlled Key"
+      owasp:
+        - "A01:2025 - Broken Access Control"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://www.postgresql.org/docs/current/ddl-rowsecurity.html

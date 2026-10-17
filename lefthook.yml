@@ -1,0 +1,32 @@
+# Hooks Git (lefthook 2). A instalação é um passo explícito:
+#   pnpm hooks:install   (= lefthook install)
+# O postinstall do pacote está bloqueado (pnpm-workspace.yaml > allowBuilds) para que
+# nenhum `pnpm install` reescreva .git/hooks sem pedir.
+# Nunca use --no-verify para contornar um hook: corrija a causa.
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: biome
+      # Formata, organiza imports e faz lint só dos arquivos staged; reindexa o que corrigir.
+      run: pnpm exec biome check --write --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+      stage_fixed: true
+    - name: gitleaks
+      # Segredos no que está staged. Sem o binário local, a varredura fica só no CI.
+      run: |
+        if command -v gitleaks >/dev/null 2>&1; then
+          gitleaks git --staged --redact --no-banner
+        else
+          echo "aviso: gitleaks não instalado; a varredura de segredos roda no CI."
+        fi
+
+commit-msg:
+  jobs:
+    - name: commitlint
+      run: pnpm exec commitlint --edit {1}
+
+pre-push:
+  jobs:
+    - name: typecheck-lint-test
+      # O cache do turbo torna isto barato quando nada mudou.
+      run: pnpm exec turbo run typecheck lint test

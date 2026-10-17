@@ -1,0 +1,39 @@
+name: Funcionalidade
+description: Sugerir uma funcionalidade ou melhoria.
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problema
+      description: Que dor do salão, do profissional ou do cliente final isto resolve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposta
+      description: Como deveria funcionar, do ponto de vista de quem usa.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Critérios de aceite
+      placeholder: |
+        - Dado ..., quando ..., então ...
+        - Cliente em outro fuso vê o horário no fuso da unidade
+  - type: checkboxes
+    id: impact
+    attributes:
+      label: Impactos a avaliar
+      options:
+        - label: Envolve dado pessoal novo ou novo uso de dado existente (LGPD)
+        - label: Muda permissão de algum papel (dono, recepção, profissional, cliente)
+        - label: Envolve pagamento, mensagens (WhatsApp/e-mail) ou integração externa
+        - label: Muda regra de disponibilidade, fuso ou horário
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas consideradas

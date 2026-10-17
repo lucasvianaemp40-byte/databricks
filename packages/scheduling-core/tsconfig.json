@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Sem DOM. "node" atende arquivos de teste e de configuração; em src/ o lint de domínio
+    // (eslint.base.mjs → createPureDomainConfig) proíbe relógio, aleatoriedade e globais de I/O.
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "src",
+    "test",
+    "*.ts"
+  ]
+}

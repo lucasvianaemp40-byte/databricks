@@ -1,0 +1,5 @@
+# Configuração pessoal do Claude Code (não versionar)
+settings.local.json
+claude-security-guidance.local.md
+security-patterns.local.yaml
+worktrees/

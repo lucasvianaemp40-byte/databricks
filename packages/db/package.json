@@ -1,0 +1,38 @@
+{
+  "name": "@salon/db",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Schema PostgreSQL (Drizzle), migrações, RLS e acesso por tenant (withTenant).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./migrate": "./src/migrate.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "lint": "eslint --max-warnings=0 .",
+    "test": "vitest run --project db:unit",
+    "test:db": "../../scripts/with-local-postgres.sh vitest run --project db:integration",
+    "migrate": "tsx src/cli/migrate.ts",
+    "generate": "drizzle-kit generate",
+    "generate:custom": "drizzle-kit generate --custom --name",
+    "check:migrations": "drizzle-kit check"
+  },
+  "dependencies": {
+    "@salon/scheduling-core": "workspace:*",
+    "drizzle-orm": "catalog:",
+    "pg": "catalog:",
+    "uuid": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/pg": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "drizzle-kit": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

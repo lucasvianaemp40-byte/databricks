@@ -1,0 +1,67 @@
+# Data/hora calculada no fuso do PROCESSO (UTC em produção, America/Sao_Paulo no notebook).
+#
+# Cada unidade (location) tem fuso IANA próprio. Horário de parede sai de Temporal com o fuso da
+# unidade ou de Intl.DateTimeFormat com `timeZone` explícito; nunca dos getters locais de Date,
+# de toLocale*String sem `timeZone`, nem de new Date(ano, mês, ...) (interpreta no fuso local).
+rules:
+  - id: server-timezone-date
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Data/hora no fuso do processo: o resultado muda entre o servidor (UTC) e a máquina do dev
+      (America/Sao_Paulo) e erra para unidades em outro fuso. Use Temporal com o fuso IANA da
+      unidade (ex.: instant.toZonedDateTimeISO(location.timeZone)) ou passe `timeZone`
+      explicitamente ao Intl/toLocale*String.
+    paths:
+      include:
+        - /apps/
+        - /packages/
+      exclude:
+        - "*.test.ts"
+        - "*.test.tsx"
+        - "*.spec.ts"
+        - /apps/web/e2e/
+    pattern-either:
+      # Getters/setters em hora local.
+      - patterns:
+          - pattern: $DATE.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(getHours|getMinutes|getSeconds|getDay|getDate|getMonth|getFullYear|getYear|getTimezoneOffset|setHours|setMinutes|setSeconds|setDate|setMonth|setFullYear|toDateString|toTimeString)$
+      # Formatação só de data/hora sem timeZone.
+      - patterns:
+          - pattern: $DATE.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(toLocaleDateString|toLocaleTimeString)$
+          - pattern-not: '$DATE.$METHOD($LOCALE, {..., timeZone: $TZ, ...})'
+      # toLocaleString também existe em número: só conta em Date.
+      - patterns:
+          - pattern-either:
+              - pattern: new Date(...).toLocaleString(...)
+              - patterns:
+                  - pattern: $DATE.toLocaleString(...)
+                  - metavariable-regex:
+                      metavariable: $DATE
+                      regex: (?i)^.*(date|data|time|hora|at|day|dia|start|end|inicio|fim|when|now|instant)$
+          - pattern-not: '$X.toLocaleString($LOCALE, {..., timeZone: $TZ, ...})'
+      # Intl sem timeZone usa o fuso do processo.
+      - patterns:
+          - pattern-either:
+              - pattern: new Intl.DateTimeFormat(...)
+              - pattern: Intl.DateTimeFormat(...)
+          - pattern-not: 'new Intl.DateTimeFormat($LOCALE, {..., timeZone: $TZ, ...})'
+          - pattern-not: 'Intl.DateTimeFormat($LOCALE, {..., timeZone: $TZ, ...})'
+      # Construtor com componentes interpreta no fuso local.
+      - pattern: new Date($YEAR, $MONTH, ...)
+    metadata:
+      category: correctness
+      subcategory: [audit]
+      cwe:
+        - "CWE-682: Incorrect Calculation"
+      confidence: MEDIUM
+      likelihood: HIGH
+      impact: MEDIUM
+      references:
+        - https://tc39.es/proposal-temporal/docs/zoneddatetime.html
+        - https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/DateTimeFormat/DateTimeFormat#timezone

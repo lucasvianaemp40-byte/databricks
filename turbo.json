@@ -1,0 +1,82 @@
+{
+  "$schema": "./node_modules/turbo/schema.json",
+  "ui": "stream",
+  "globalDependencies": [
+    "tsconfig.base.json",
+    "eslint.base.mjs"
+  ],
+  "globalEnv": [
+    "CI",
+    "NODE_ENV",
+    "TZ"
+  ],
+  "globalPassThroughEnv": [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "NODE_EXTRA_CA_CERTS",
+    "NODE_OPTIONS",
+    "FORCE_COLOR",
+    "TERM",
+    "CLAUDECODE"
+  ],
+  "tasks": {
+    "transit": {
+      "dependsOn": [
+        "^transit"
+      ]
+    },
+    "build": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        ".next/**",
+        "!.next/cache/**",
+        "dist/**"
+      ]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "typecheck": {
+      "dependsOn": [
+        "transit"
+      ]
+    },
+    "lint": {
+      "dependsOn": [
+        "transit"
+      ]
+    },
+    "test": {
+      "dependsOn": [
+        "transit"
+      ],
+      "env": [
+        "FC_NUM_RUNS",
+        "FC_SEED",
+        "FC_PATH"
+      ],
+      "outputs": []
+    },
+    "test:db": {
+      "cache": false,
+      "dependsOn": [
+        "transit"
+      ],
+      "passThroughEnv": [
+        "TEST_DATABASE_URL"
+      ]
+    },
+    "e2e": {
+      "cache": false,
+      "passThroughEnv": [
+        "E2E_*",
+        "PLAYWRIGHT_*",
+        "TEST_DATABASE_URL"
+      ]
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "name": "@salon/monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Agenda Salão: SaaS multi-tenant de agendamento para salões de beleza e barbearias (monorepo).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "packageManager": "pnpm@11.28.5+sha512.484563d30b4c2ad27cb48aa94ff2b302dbcebc8ff6bf28816c2589886e146ce7f76f354f3bc1a438e6f5e9768c302aa0a6f7add8232903cd4cf81426cbc14d9e",
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:db": "scripts/with-local-postgres.sh turbo run test:db",
+    "test:hooks": "node --test \".claude/hooks/test/**/*.{js,mjs,cjs}\"",
+    "e2e": "turbo run e2e",
+    "lint": "biome check . && eslint --max-warnings=0 \"*.{js,mjs,cjs}\" && turbo run lint",
+    "lint:fix": "biome check --write . && eslint --fix --max-warnings=0 \"*.{js,mjs,cjs}\" && turbo run lint -- --fix",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "knip": "knip",
+    "hooks:install": "lefthook install"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "catalog:",
+    "@commitlint/cli": "catalog:",
+    "@commitlint/config-conventional": "catalog:",
+    "@eslint/js": "catalog:",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "eslint-plugin-security": "catalog:",
+    "globals": "catalog:",
+    "knip": "catalog:",
+    "lefthook": "catalog:",
+    "turbo": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:"
+  }
+}

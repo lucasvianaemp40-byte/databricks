@@ -1,0 +1,64 @@
+# SQL montado com interpolação de string (injeção de SQL, ASVS 1.2.4 / OWASP A05:2025).
+#
+# Seguro no projeto:
+#   - sql`... ${valor} ...` do Drizzle (tagged template): cada ${} vira parâmetro ($1, $2...).
+#   - client.query('... $1 ...', [valor]) do node-postgres.
+#   - Identificador dinâmico só com client.escapeIdentifier(nome) / escapeLiteral(valor).
+#   - Constante de módulo em CAIXA_ALTA (ex.: ${BOOKKEEPING_TABLE}): por convenção, valor fixo
+#     do código, nunca derivado de entrada.
+# Proibido: sql.raw() com valor não literal, e template/concatenação passados a query/execute.
+#
+# Fora do escopo: packages/db/src/schema/, que só monta DDL (CHECK) a partir de constantes do
+# código, lido pelo drizzle-kit no `generate`; DDL não aceita parâmetro e esse código nunca
+# recebe entrada de requisição. Exceção pontual em outro lugar: comentário
+# `// nosemgrep: sql-raw-interpolation -- <motivo>` na linha, revisado no PR.
+rules:
+  - id: sql-raw-interpolation
+    languages: [typescript, javascript]
+    severity: ERROR
+    paths:
+      exclude:
+        - /packages/db/src/schema/
+    message: >-
+      SQL montado por interpolação de string. Use o tagged template sql`...${valor}...` do
+      Drizzle ou consulta parametrizada (client.query('... $1', [valor])). Para identificador
+      dinâmico (nome de banco/papel), use client.escapeIdentifier(). Nunca sql.raw() com dado
+      que não seja literal do código.
+    patterns:
+      - pattern-either:
+          # sql.raw só aceita literal fixo do código.
+          - patterns:
+              - pattern: $SQL.raw($ARG)
+              - metavariable-regex:
+                  metavariable: $SQL
+                  regex: ^sql$
+              - pattern-not: $SQL.raw("...")
+          # Template com ${...} ou concatenação passados direto ao driver/ORM.
+          - patterns:
+              - pattern-either:
+                  - pattern: $DB.$METHOD(`...${$EXPR}...`, ...)
+                  - pattern: $DB.$METHOD("..." + $EXPR, ...)
+                  - pattern: $DB.$METHOD($EXPR + "...", ...)
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: ^(query|execute|unsafe|\$executeRawUnsafe|\$queryRawUnsafe)$
+              # Identificadores e literais escapados pelo próprio driver são aceitos.
+              - metavariable-pattern:
+                  metavariable: $EXPR
+                  patterns:
+                    - pattern-not: $C.escapeIdentifier(...)
+                    - pattern-not: $C.escapeLiteral(...)
+                    - pattern-not-regex: ^[A-Z][A-Z0-9_]*$
+    metadata:
+      category: security
+      subcategory: [vuln]
+      cwe:
+        - "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      owasp:
+        - "A05:2025 - Injection"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://orm.drizzle.team/docs/sql
+        - https://node-postgres.com/features/queries#parameterized-query
