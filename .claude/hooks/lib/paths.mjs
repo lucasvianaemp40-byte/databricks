@@ -468,8 +468,7 @@ function globSegmentMatches(glob, name) {
 }
 
 /**
- * Nível de um glob que não deu para avaliar inteiro (chaves acima do teto, caminho longo
- * demais), a partir do prefixo já conhecido: `deny` se ele está sob `.claude/` (algum segmento
+ * Nível de um glob cujas chaves passam do teto, a partir do prefixo já conhecido: `deny` se ele está sob `.claude/` (algum segmento
  * completo casa `.claude`), `ask` nos outros casos.
  * @param {string} prefix
  * @returns {'deny' | 'ask'}
@@ -480,6 +479,26 @@ function unresolvedGlobLevel(prefix) {
     .slice(0, -1)
     .filter((s) => s !== '' && s !== '.');
   return complete.some((seg) => globSegmentMatches(seg, '.claude')) ? 'deny' : 'ask';
+}
+
+/**
+ * Nível de um caminho com glob longo demais para avaliar inteiro: cada segmento, literal ou com
+ * curinga, é comparado com `.claude` até o primeiro que não dá para avaliar (chaves, classe
+ * inválida). Segmento longo demais para virar expressão regular conta como "pode casar" quando o
+ * tamanho permite. `deny` se algum pode casar; sem decisão, `deny` quando o primeiro segmento
+ * não vazio tem curinga (ele mesmo pode ser a pasta .claude) e `ask` nos outros casos.
+ * @param {string} p
+ * @returns {'deny' | 'ask'}
+ */
+function longGlobLevel(p) {
+  const segments = p.split('/').filter((s) => s !== '' && s !== '.');
+  for (const seg of segments) {
+    if (seg.includes('{') || compileGlob(seg) === null) {
+      return /[*?[{]/.test(segments[0] ?? '') ? 'deny' : 'ask';
+    }
+    if (globSegmentMatches(seg, '.claude')) return 'deny';
+  }
+  return 'ask';
 }
 
 /**
@@ -525,7 +544,7 @@ export function protectedGlobMatch(rel) {
   const p = String(rel).replace(/\\/g, '/').replace(/^\.\//, '');
   if (!/[*?[{]/.test(p)) return null;
   if (p.length > MAX_GLOB_PATH_LENGTH) {
-    return { level: unresolvedGlobLevel(p.slice(0, p.search(/[*?[{]/))), unresolved: true };
+    return { level: longGlobLevel(p), unresolved: true };
   }
   const { expansions, unresolved } = expandGlobBraces(p);
   let sampleAsk = false;

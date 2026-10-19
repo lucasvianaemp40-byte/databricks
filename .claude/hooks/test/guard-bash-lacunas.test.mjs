@@ -132,6 +132,39 @@ table('push depois de checkout/switch com --track ou a partir de ref remota', [
   ['git checkout -b x "$BASE" && git push', 'ask'],
 ]);
 
+// `git branch -u <up> HEAD` (ou `@`) muda o upstream da branch atual, como sem alvo; alvo
+// dinâmico não dá para comparar com a branch atual.
+table('git branch -u com alvo HEAD, @ ou dinâmico', [
+  ['git branch -u origin/main HEAD && git push', 'deny'],
+  ['git branch -u origin/main @ && git push', 'deny'],
+  ['git branch --set-upstream-to=origin/main HEAD && git push', 'deny'],
+  ['git branch -uorigin/main -- HEAD && git push', 'deny'],
+  ['git branch -u origin/main "$B" && git push', 'ask'],
+  ['git branch -u origin/claude/x HEAD && git push', 'none'],
+  ['git branch -u origin/claude/x @ && git push', 'none'],
+  ['git branch -u origin/main HEAD && git push -u origin claude/feature-x', 'none'],
+]);
+
+// `origin/HEAD` aponta para a branch padrão do remoto; um nome de remoto sozinho (`origin`)
+// resolve para `origin/HEAD`. Sem a forma `<remoto>/<branch>` clara, o upstream é desconhecido.
+table('ponto de partida origin/HEAD ou nome de remoto sozinho', [
+  ['git checkout -b x origin/HEAD && git push', 'ask'],
+  ['git checkout -b x refs/remotes/origin/HEAD && git push', 'ask'],
+  ['git checkout -b x remotes/origin/HEAD && git push', 'ask'],
+  ['git checkout -b x origin && git push', 'ask'],
+  ['git switch -c x --track origin/HEAD && git push', 'ask'],
+  ['git switch -c x origin && git push', 'ask'],
+  ['git checkout -t origin/HEAD && git push', 'ask'],
+  ['git branch -u origin/HEAD && git push', 'ask'],
+  ['git branch --set-upstream-to=origin && git push', 'ask'],
+  ['git checkout -b x origin/HEAD && git push -u origin HEAD', 'none'],
+  ['git checkout -b x origin/HEAD', 'none'],
+  ['git switch -c x HEAD && git push', 'none'],
+  ['git switch -c x HEAD~2 && git push', 'none'],
+  ['git checkout -b x 086aa67 && git push', 'none'],
+  ['git checkout -b x refs/heads/claude/y && git push', 'none'],
+]);
+
 // xargs (findutils 4.9) usa getopt_long com "+": letras agrupadas (`-ra`), valor anexado ou no
 // argumento seguinte para a, d, E, I, L, n, P, s; valor só anexado para e, i, l; opção longa
 // por prefixo único (`--arg` = `--arg-file`).

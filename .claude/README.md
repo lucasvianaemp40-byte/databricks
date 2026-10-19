@@ -70,6 +70,11 @@ Limites conhecidos:
 - `patch` que não cita o arquivo (`patch -p1 < x.diff`, `patch -d .claude`) passa sem
   decisão: o alvo está no conteúdo do diff, que o guarda não lê. `git apply` sempre pede
   confirmação.
+- `git push` sem refspec depois de `git checkout -b`/`git switch -c`/`git branch -u` na mesma
+  linha: o guarda não consulta o git para saber o que um nome sem barra é (remoto ou branch
+  local) nem para onde `origin/HEAD` aponta. Ponto de partida ou upstream fora da forma
+  `<remoto>/<branch>` (`origin`, `origin/HEAD`, `main`) pede confirmação; `HEAD`, `@`, hash,
+  `refs/heads/...` e `refs/tags/...` são locais e não pedem.
 - Cópia para dentro de `.claude/` com o nome do arquivo vindo da origem
   (`cp settings.json .claude/`) pede confirmação em vez de negar.
 - As tabelas de opções de `lib/cli-options.mjs` vêm do git 2.43 (`git <sub>

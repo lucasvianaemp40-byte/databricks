@@ -230,6 +230,37 @@ describe('protectedGlobLevel: sequência, teto e tamanho (fail-closed)', () => {
   }
 });
 
+// Acima de MAX_GLOB_PATH_LENGTH a decisão olhava só o prefixo literal antes do primeiro curinga:
+// `.c*/hooks/...` não tinha segmento completo nesse prefixo e caía em `ask`. Agora cada segmento
+// é avaliado contra `.claude` até o primeiro que não dá para avaliar (chaves, classe inválida).
+describe('protectedGlobLevel: caminho longo com curinga no segmento de .claude', () => {
+  const long = 'a'.repeat(2000);
+  const braces = `{${'a,'.repeat(600)}b}`;
+  const cases = /** @type {Array<[string, 'deny' | 'ask' | null]>} */ ([
+    [`.c*/hooks/${long}`, 'deny'],
+    [`.cl?ude/hooks/${long}`, 'deny'],
+    [`.c[l]aude/settings.json/${long}`, 'deny'],
+    [`x/.c*/hooks/${long}`, 'deny'],
+    [`.CLAUDE/${long}*`, 'deny'],
+    // Segmento longo demais para virar expressão regular conta como "pode casar".
+    [`.c[${'a-z'.repeat(100)}]aude/hooks/${long}`, 'deny'],
+    // Não dá para decidir (chaves) e o primeiro segmento tem curinga: nega.
+    [`*/settings.json/${braces}`, 'deny'],
+    [`.c{l,x}aude/hooks/${long}`, 'deny'],
+    // Primeiro segmento literal fora de .claude: pede confirmação, como antes.
+    [`src/${braces}`, 'ask'],
+    [`src/${long}*`, 'ask'],
+    [`src/.c*/x/${long}`, 'deny'],
+    [`*/${long}`, 'ask'],
+    [`src/a*/${'b'.repeat(2000)}/[x].md`, 'ask'],
+  ]);
+  for (const [glob, expected] of cases) {
+    it(`${String(expected).padEnd(4)} ${glob.slice(0, 40)}… (${glob.length})`, () => {
+      assert.equal(protectedGlobLevel(glob), expected);
+    });
+  }
+});
+
 describe('globs: tamanho e ReDoS', () => {
   it('glob com milhares de * depois de .env continua sendo segredo (o limite não falha aberto)', () => {
     assert.notEqual(classifySecretPath(`.env${'*'.repeat(5000)}`), null);

@@ -738,7 +738,9 @@ function trackState(cmd, ctx) {
           headUpstream: change.renamed ? ctx.headUpstream : change.upstream,
         };
       }
-      // Só o upstream mudou: vale quando o branch alvo é o HEAD (ou quando não dá para saber).
+      // Só o upstream mudou: vale quando o branch alvo é o HEAD; alvo dinâmico pode ser o HEAD,
+      // e aí o upstream fica desconhecido (fail-closed).
+      if (change.upstreamOf === 'unknown') return { ...ctx, headUpstream: 'unknown' };
       const head = ctx.headBranch ?? ctx.currentBranch(ctx.cwd);
       const other =
         change.upstreamOf !== undefined &&
@@ -758,9 +760,11 @@ function trackState(cmd, ctx) {
  *   `--detach`, nome dinâmico); ausente quando o comando não troca de branch.
  * - `upstream`: branch remoto que o comando define como upstream (`main` em
  *   `git checkout -b x origin/main`), `null` quando não define nenhum, `'unknown'` quando não dá
- *   para saber (`--track=inherit`, ponto de partida dinâmico); ausente quando o comando não
+ *   para saber (`--track=inherit`, `origin/HEAD`, ponto de partida dinâmico ou sem a forma
+ *   `<remoto>/<branch>`); ausente quando o comando não
  *   mexe no upstream (troca para branch existente: vale a configuração persistida).
- * - `upstreamOf`: branch cujo upstream `git branch -u <up> <branch>` mudou (ausente = HEAD).
+ * - `upstreamOf`: branch cujo upstream `git branch -u <up> <branch>` mudou (ausente = HEAD,
+ *   inclusive com alvo `HEAD` ou `@`; `'unknown'` quando o alvo é dinâmico).
  * - `renamed`: `git branch -m` renomeia e o upstream segue a branch.
  * @typedef {object} GitHeadChange
  * @property {string} [branch]
@@ -784,17 +788,22 @@ const GIT_GLOBAL_VALUE_OPTIONS = new Set([
 
 /**
  * Branch remoto de uma ref de rastreamento: `origin/main`, `remotes/origin/main` e
- * `refs/remotes/origin/main` dão `main`. `null` quando a ref não tem a forma
- * `<remoto>/<branch>` (branch local sem barra, `refs/heads/x`, hash).
+ * `refs/remotes/origin/main` dão `main`. `null` quando a ref é claramente local (`HEAD`, `@`,
+ * `HEAD~2`, hash, `refs/heads/x`, `refs/tags/x`). `'unknown'` quando não tem a forma
+ * `<remoto>/<branch>` clara: `origin/HEAD` aponta para a branch padrão do remoto, e um nome sem
+ * barra pode ser um remoto (`origin` resolve para `origin/HEAD`) ou uma branch local (fail-closed).
  * @param {string} ref
  * @returns {string | null}
  */
 function remoteBranchOf(ref) {
+  if (/^(?:HEAD|@)(?:[~^]\d*)*$/.test(ref) || /^[0-9a-f]{7,64}$/i.test(ref)) return null;
+  if (/^refs\/(?:heads|tags)\//.test(ref)) return null;
   const r = ref.replace(/^refs\/remotes\//, '').replace(/^remotes\//, '');
   if (r.startsWith('refs/')) return null;
   const slash = r.indexOf('/');
-  if (slash <= 0 || slash === r.length - 1) return null;
-  return r.slice(slash + 1);
+  if (slash <= 0 || slash === r.length - 1) return 'unknown';
+  const branch = r.slice(slash + 1);
+  return branch === 'HEAD' ? 'unknown' : branch;
 }
 
 /**
@@ -962,7 +971,9 @@ function trackBranch(rest) {
   }
   if (upstream === undefined) return null;
   const target = names[0];
-  return target === undefined ? { upstream } : { upstream, upstreamOf: target };
+  // `HEAD` e `@` são a branch atual, como sem alvo.
+  if (target === undefined || target === 'HEAD' || target === '@') return { upstream };
+  return { upstream, upstreamOf: isUnresolvedRef(target) ? 'unknown' : target };
 }
 
 /**
@@ -6215,7 +6226,7 @@ function checkGitPush(rest, restDynamic, ctx, v, configs, depth) {
       const upstream = ctx.headUpstream;
       if (upstream === 'unknown') {
         v.ask(
-          'git push sem refspec depois de definir o upstream na mesma linha (--track=inherit ou ponto de partida dinâmico); confirme o destino.',
+          'git push sem refspec depois de definir o upstream na mesma linha (--track=inherit, origin/HEAD, nome de remoto sozinho ou valor dinâmico); confirme o destino.',
         );
       } else if (typeof upstream === 'string' && isProtectedBranch(upstream)) {
         v.deny(
