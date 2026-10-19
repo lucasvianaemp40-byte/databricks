@@ -63,5 +63,38 @@ export function Page(): unknown {
     await cancelAppointment(session.tenantId, String(formData.get('id')));
   }
 
-  return [inlineAction, inlineGuarded, notExported];
+  // ruleid: server-action-auth
+  const inlineArrow = async (formData: FormData): Promise<void> => {
+    'use server';
+    await cancelAppointment('tenant', String(formData.get('id')));
+  };
+
+  // ruleid: server-action-auth
+  const inlineExpression = async (formData: FormData): Promise<void> => {
+    'use server';
+    await cancelAppointment('tenant', String(formData.get('id')));
+  };
+
+  // ok: server-action-auth
+  const inlineArrowGuarded = async (formData: FormData): Promise<void> => {
+    'use server';
+    const session = await requireTenantSession();
+    await cancelAppointment(session.tenantId, String(formData.get('id')));
+  };
+
+  // Sem a diretiva 'use server' não é Server Action.
+  // ok: server-action-auth
+  const plainHandler = async (formData: FormData): Promise<void> => {
+    await cancelAppointment('tenant', String(formData.get('id')));
+  };
+
+  return [
+    inlineAction,
+    inlineGuarded,
+    notExported,
+    inlineArrow,
+    inlineExpression,
+    inlineArrowGuarded,
+    plainHandler,
+  ];
 }

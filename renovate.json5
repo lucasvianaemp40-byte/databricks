@@ -39,7 +39,7 @@
   },
   customManagers: [
     {
-      description: 'Imagens Docker pinadas por digest fora de `image:` (docker run, env, docker_name)',
+      description: 'Imagens Docker pinadas por digest fora de `image:` (docker run, env como GITLEAKS_IMAGE e OSV_IMAGE, docker_name)',
       customType: 'regex',
       managerFilePatterns: ['/^\\.github/workflows/[^/]+\\.ya?ml$/'],
       matchStrings: [
@@ -79,16 +79,20 @@
         'aquasecurity/trivy',
         'semgrep/semgrep',
         'ghcr.io/gitleaks/gitleaks',
+        'ghcr.io/google/osv-scanner',
         'rhysd/actionlint',
         'ghcr.io/zaproxy/zaproxy',
       ],
       groupName: 'security-tooling',
     },
     {
-      description: 'PostgreSQL do CI fica na major 18 (o schema também roda em 16 local)',
+      // Precisa vir DEPOIS da regra de github-actions: o serviço do ci.yml é extraído pelo
+      // manager github-actions e cairia no grupo dele; o compose.yaml, pelo docker-compose.
+      description: 'PostgreSQL de teste: mesma imagem e digest no ci.yml (serviço do test-db) e no compose.yaml, num PR só; fica na major 18 (o schema também roda em 16 local)',
       matchDatasources: ['docker'],
       matchPackageNames: ['postgres'],
       allowedVersions: '<19',
+      groupName: 'postgres-test-image',
     },
     {
       description: 'Majors: 14 dias e aprovação manual no Dependency Dashboard',

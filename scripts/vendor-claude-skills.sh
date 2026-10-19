@@ -7,9 +7,11 @@
 #     `git cat-file`: nenhum checkout, hook, filtro, submódulo ou script dos repositórios roda;
 #   - allowlist explícita, arquivo a arquivo (MANIFEST abaixo); só arquivos comuns (modo
 #     100644) são aceitos: links simbólicos e executáveis são recusados;
-#   - `allowed-tools` amplos (Bash sem escopo, Write, Edit, WebFetch, Task) são reduzidos a
-#     leitura, porque `allowed-tools` pré-aprova ferramentas sem passar pelo trust do workspace;
-#     agentes sem `tools` recebem uma lista mínima;
+#   - `allowed-tools` pré-aprova ferramentas sem passar pelo trust do workspace: os amplos
+#     (Bash sem escopo, Write, Edit, WebFetch, Task) são reduzidos a leitura ou removidos, e a
+#     saída só passa se cada item estiver na allowlist SAFE_ALLOWED_TOOLS (leitura, tarefas e
+#     Bash apenas para git diff/log/show/blame e gh pr view/diff); agentes sem `tools` recebem
+#     uma lista mínima;
 #   - nomes recebem prefixo da origem (tob-, sentry-, anthropic-, superpowers-, ms-) para não
 #     colidir com skills próprias nem substituir comandos embutidos (ex.: /security-review);
 #   - a saída é conferida: sem caracteres invisíveis/bidi, sem `!` + crase (execução de shell
@@ -129,8 +131,30 @@ const READ_ONLY_GIT =
   'Read Grep Glob Bash(git diff *) Bash(git log *) Bash(git show *) Bash(git blame *)';
 const PW = 'pnpm --filter @salon/web exec playwright';
 
+// Únicos itens que um `allowed-tools` vendorizado pode pré-aprovar. Bash com curinga só para
+// comandos de leitura (o guard-bash ainda confere cada chamada, ex.: `git diff --output`).
+// Qualquer outro item (Bash de outro comando, Write, Edit, WebFetch, Task, MCP...) aborta.
+const SAFE_ALLOWED_TOOLS = new Set([
+  'Read',
+  'Grep',
+  'Glob',
+  'LSP',
+  'AskUserQuestion',
+  'TaskCreate',
+  'TaskUpdate',
+  'TaskList',
+  'TaskGet',
+  'Bash(git diff *)',
+  'Bash(git log *)',
+  'Bash(git show *)',
+  'Bash(git blame *)',
+  'Bash(gh pr view *)',
+  'Bash(gh pr diff *)',
+]);
+
 // Cada entrada: origem, destino e as adaptações locais (todas listadas no NOTICE).
 //   name / description / allowedTools / addTools: frontmatter
+//   dropAllowedTools: remove o `allowed-tools` (cada chamada passa pelas permissões normais)
 //   replace: [de, para] obrigatórios (falha se o trecho sumir num SHA novo)
 //   replaceAll: [de, para] aplicados onde houver
 //   between: [início, fim, novo] troca o trecho [início, fim)
@@ -458,7 +482,10 @@ const MANIFEST = [
     from: 'skills/playwright-cli/SKILL.md',
     to: '.claude/skills/ms-playwright-cli/SKILL.md',
     name: 'ms-playwright-cli',
-    allowedTools: `Bash(${PW} cli *)`,
+    // `Bash(<cli> *)` pré-aprovaria run-code/eval (código arbitrário no navegador), state-load,
+    // cookies, --config e --filename. Sem allowed-tools, cada chamada passa pelas permissões
+    // normais e pelo guard-bash (ask para esses subcomandos, deny para attach e --profile).
+    dropAllowedTools: true,
     fenced: ['playwright-cli', `${PW} cli`],
     replace: [
       [
@@ -469,7 +496,7 @@ const MANIFEST = [
     section: [
       [
         '## Installation',
-        `In this repository the CLI comes from the app's Playwright, pinned by \`pnpm-lock.yaml\`: run \`${PW} cli <command>\`. Never install \`@playwright/cli\` globally and never use \`npx\` or \`npm install -g\` (dependency quarantine). Never \`attach --cdp\`, \`attach --extension\` or \`--profile\` pointing at a personal browser: only isolated sessions against http://localhost:3000 (dev) or http://127.0.0.1:3100 (production build used by E2E).`,
+        `In this repository the CLI comes from the app's Playwright, pinned by \`pnpm-lock.yaml\`: run \`${PW} cli <command>\`. Never install \`@playwright/cli\` globally and never use \`npx\` or \`npm install -g\` (dependency quarantine). Never \`attach --cdp\`, \`attach --extension\`, \`--profile\` or \`--persistent\` pointing at a personal browser (the guard denies them): only isolated sessions against http://localhost:3000 (dev) or http://127.0.0.1:3100 (production build used by E2E). This skill pre-approves no command: \`run-code\`, \`eval\`, \`state-save\`/\`state-load\`, \`cookie-*\`, \`localstorage-*\`/\`sessionstorage-*\`, \`route\`, \`upload\`, \`install-browser\`, \`--filename\` and \`--config\` always ask for confirmation.`,
       ],
       [
         '## Specific tasks',
@@ -477,7 +504,7 @@ const MANIFEST = [
       ],
     ],
     note: `Neste repositório o comando é \`${PW} cli\` (Playwright do app, travado no lockfile); specs E2E ficam em \`apps/web/e2e/\` e rodam com \`pnpm e2e\`. Arquivos de estado (state-save) com sessão nunca entram no git.`,
-    changes: 'nome com prefixo; comando local em vez do binário global; seção de instalação substituída (sem npm -g/npx, sem attach ao navegador pessoal); allowed-tools restrito; referências não vendorizadas removidas',
+    changes: 'nome com prefixo; comando local em vez do binário global; seção de instalação substituída (sem npm -g/npx, sem attach ao navegador pessoal); allowed-tools removido (nada pré-aprovado); referências não vendorizadas removidas',
   },
   ...['element-attributes', 'request-mocking', 'storage-state'].map((r) => ({
     src: 'ms',
@@ -554,15 +581,55 @@ function applyFrontmatter(text, item) {
     if (!/^description: .*$/m.test(head)) throw new Error(`sem description: ${item.to}`);
     head = head.replace(/^description: .*$/m, `description: ${JSON.stringify(item.description)}`);
   }
+  if (item.allowedTools && item.dropAllowedTools) {
+    throw new Error(`allowedTools e dropAllowedTools juntos: ${item.to}`);
+  }
+  // Valor do allowed-tools: a linha da chave e as continuações indentadas (lista YAML).
+  const allowedToolsEntry = /^allowed-tools:.*(?:\n[ \t]+.*)*$/m;
   if (item.allowedTools) {
-    if (!/^allowed-tools:.*$/m.test(head)) throw new Error(`sem allowed-tools: ${item.to}`);
-    head = head.replace(/^allowed-tools:.*$/m, `allowed-tools: ${item.allowedTools}`);
+    if (!allowedToolsEntry.test(head)) throw new Error(`sem allowed-tools: ${item.to}`);
+    head = head.replace(allowedToolsEntry, `allowed-tools: ${item.allowedTools}`);
+  }
+  if (item.dropAllowedTools) {
+    head = head.replace(/^allowed-tools:.*(?:\n[ \t]+.*)*(?:\n|$)/m, '').replace(/\n$/, '');
   }
   if (item.addTools) {
     if (/^tools:/m.test(head)) throw new Error(`tools já existe: ${item.to}`);
     head = `${head}\ntools: ${item.addTools}`;
   }
   return `---\n${head}\n---\n${text.slice(fm[0].length)}`;
+}
+
+// Falha se o frontmatter pré-aprovar qualquer item fora de SAFE_ALLOWED_TOOLS. Aceita o valor
+// numa linha (`Read Grep`, `Read, Grep`, `[Read, Grep]`) ou em lista YAML indentada; o que não
+// for reconhecido como item (sobra de parêntese, aspas, chave escrita de outro jeito) também
+// aborta, para falhar fechado.
+function auditAllowedTools(text, where) {
+  const fm = /^---\n([\s\S]*?)\n---\n/.exec(text);
+  if (!fm) return;
+  const lines = fm[1].split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!/^\s*["']?allowed[-_ ]?tools["']?\s*:/i.test(line)) continue;
+    const key = /^allowed-tools:(.*)$/.exec(line);
+    if (!key) throw new Error(`chave allowed-tools fora do formato esperado em ${where}: ${line}`);
+    let value = key[1];
+    while (i + 1 < lines.length && /^[ \t]+\S/.test(lines[i + 1])) value += `\n${lines[++i]}`;
+    const listed = value.replace(/^[ \t]*-[ \t]+/gm, ' ').replace(/^\s*\[|\]\s*$/g, '');
+    const items = [];
+    const rest = listed.replace(/[^\s,()]+(?:\([^()]*\))?/g, (token) => {
+      items.push(token);
+      return '';
+    });
+    if (rest.replace(/[\s,]/g, '') !== '') {
+      throw new Error(`allowed-tools ilegível em ${where}: ${JSON.stringify(value)}`);
+    }
+    for (const tool of items) {
+      if (!SAFE_ALLOWED_TOOLS.has(tool)) {
+        throw new Error(`allowed-tools fora da allowlist em ${where}: ${tool}`);
+      }
+    }
+  }
 }
 
 function replaceSection(text, heading, body, where) {
@@ -645,9 +712,7 @@ for (const item of MANIFEST) {
   for (const stale of ['{baseDir}', 'superpowers:', 'differential-review:']) {
     if (text.includes(stale)) throw new Error(`referência antiga "${stale}" em ${item.to}`);
   }
-  if (/^allowed-tools:.*(?:\bBash(?!\()|\bWrite\b|\bEdit\b|\bWebFetch\b)/m.test(text)) {
-    throw new Error(`allowed-tools amplo em ${item.to}`);
-  }
+  auditAllowedTools(text, item.to);
   write(item.to, text);
 }
 

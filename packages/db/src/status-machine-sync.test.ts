@@ -51,8 +51,9 @@ describe('máquina de estados: banco x domínio', () => {
 
   it('a lista de status que ocupam a agenda nos triggers SQL é a do core', () => {
     const occupying = APPOINTMENT_STATUSES.filter((status) => occupiesSchedule(status));
-    // Aparece no trigger que deriva `active` e no que sincroniza as ocupações.
-    expect(securityMigration.split(quoted(occupying)).length - 1).toBe(2);
+    // Aparece no trigger que deriva `active`, no que sincroniza as ocupações e na checagem de
+    // completude das ocupações no COMMIT (appointments_assert_occupancy).
+    expect(securityMigration.split(quoted(occupying)).length - 1).toBe(3);
   });
 
   it('os estados iniciais aceitos pelo trigger são os do core', () => {

@@ -16,8 +16,10 @@ segue a proposta de Michael Nygard
 | [0005](0005-fila-pg-boss.md) | Fila de jobs com pg-boss no próprio PostgreSQL | Proposto |
 | [0006](0006-hospedagem-e-residencia.md) | Hospedagem e residência de dados no Brasil | Proposto |
 | [0007](0007-politica-de-supply-chain.md) | Política de cadeia de suprimentos | Aceito |
-| [0008](0008-desenvolvimento-assistido-por-ia.md) | Desenvolvimento assistido por IA (kit Claude Code) | Aceito |
+| [0008](0008-desenvolvimento-assistido-por-ia.md) | Desenvolvimento assistido por IA (kit Claude Code) | Aceito (decisão 3 substituída pelo ADR-0011) |
 | [0009](0009-lint-biome-eslint.md) | Lint e formatação: Biome + ESLint enxuto | Aceito |
+| [0010](0010-observabilidade.md) | Observabilidade: logs, erros e eventos de segurança | Proposto (iteração 1, T2) |
+| [0011](0011-plugins-e-mcp-na-nuvem.md) | Plugins e MCP do Playwright nas sessões na nuvem | Aceito |
 
 ## Como escrever um ADR
 

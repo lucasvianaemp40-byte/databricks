@@ -4,6 +4,7 @@ import {
   DatabaseConstraintError,
   findPostgresError,
   IdempotencyKeyConflictError,
+  IdentifierConflictError,
   InvalidStatusTransitionError,
   mapDatabaseError,
   SlotUnavailableError,
@@ -74,6 +75,9 @@ describe('mapDatabaseError', () => {
       IdempotencyKeyConflictError,
       'IDEMPOTENCY_KEY_CONFLICT',
     ],
+    // A PK `id` é global: colidir com o id de outro tenant não pode virar "já existe".
+    ['23505', 'customers_pkey', IdentifierConflictError, 'IDENTIFIER_CONFLICT'],
+    ['23505', 'appointment_events_pkey', IdentifierConflictError, 'IDENTIFIER_CONFLICT'],
   ] as const)('%s (%s) vira %s', (code, constraint, ErrorClass, stableCode) => {
     const original = wrapped(pgError(code, constraint));
     const mapped = mapDatabaseError(original);

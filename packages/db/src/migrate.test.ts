@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -5,6 +6,7 @@ import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_MIGRATIONS_FOLDER,
+  INVARIANTS_FUNCTION_SHA256,
   loadMigrations,
   MigrationIntegrityError,
   PRIVILEGED_MIGRATION_MARKER,
@@ -78,6 +80,21 @@ describe('loadMigrations', () => {
     expect(sql).not.toMatch(/DISABLE ROW LEVEL SECURITY|NO FORCE ROW LEVEL SECURITY/i);
     // Papéis só nascem/são alterados com NOSUPERUSER/NOBYPASSRLS.
     expect(sql).not.toMatch(/(CREATE|ALTER)\s+ROLE[^;]*?(?<!NO)(SUPERUSER|BYPASSRLS)\b/i);
+  });
+
+  it('o hash fixado da função de invariantes é o do corpo definido pela última migração que a cria', () => {
+    const definitions = loadMigrations()
+      .flatMap((migration) => migration.statements)
+      .flatMap((statement) => [
+        ...statement.matchAll(
+          /CREATE (?:OR REPLACE )?FUNCTION app_private\.assert_security_invariants\(\)[\s\S]*?AS \$\$([\s\S]*?)\$\$/g,
+        ),
+      ])
+      .map((match) => match[1] ?? '');
+    expect(definitions.length).toBeGreaterThan(0);
+    const body = definitions.at(-1) ?? '';
+    // Se falhar depois de mudar a função numa migração: atualize INVARIANTS_FUNCTION_SHA256.
+    expect(createHash('sha256').update(body).digest('hex')).toBe(INVARIANTS_FUNCTION_SHA256);
   });
 
   it('recusa journal fora de ordem', () => {

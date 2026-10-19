@@ -7,6 +7,8 @@ import {
   type AvailabilityInput,
   type AvailableSlot,
   computeAvailableSlots,
+  MAX_CANDIDATE_STARTS,
+  MAX_NOTICE_MINUTES,
   MAX_RANGE_DAYS,
 } from './compute-available-slots';
 import { type ServiceDefinition, singlePhaseService } from './service';
@@ -92,6 +94,19 @@ describe('computeAvailableSlots: jornada, grade e rótulos', () => {
       service: singlePhaseService(90),
     });
     expect(times(slots)).toEqual(['09:00', '09:30', '10:00', '10:30']);
+  });
+
+  it('deve unir turnos encostados (por isso o chamador passa só os turnos da unidade consultada)', () => {
+    // Profissional com 09-12 na unidade A e 12-18 na unidade B (o banco aceita faixas
+    // encostadas em unidades diferentes). Unidos, os turnos ofereceriam 11:30 para um serviço
+    // de 60 min que começa em A e termina em B; com só os turnos de A, não.
+    const unitA = { isoWeekday: 2, start: '09:00', end: '12:00' } as const;
+    const unitB = { isoWeekday: 2, start: '12:00', end: '18:00' } as const;
+    const service = singlePhaseService(60);
+    const mixed = computeAvailableSlots({ ...base, service, weeklySchedule: [unitA, unitB] });
+    expect(times(mixed)).toContain('11:30');
+    const onlyA = computeAvailableSlots({ ...base, service, weeklySchedule: [unitA] });
+    expect(times(onlyA)).toEqual(['09:00', '09:30', '10:00', '10:30', '11:00']);
   });
 
   it('deve aceitar 24:00 como fim de turno', () => {
@@ -407,6 +422,70 @@ describe('computeAvailableSlots: horário de verão e fusos', () => {
     ]);
   });
 
+  it('não deve oferecer instantes em que o relógio volta para a véspera (St. John’s, 2010-11-07)', () => {
+    // 00:01 (-02:30) voltou para 23:01 do dia 06 (-03:30): depois de o dia 07 começar, o
+    // relógio repassou por 23:01..23:59 da véspera. Esses instantes não são do dia 07 (nem do
+    // 06, que já terminou); 00:00 do dia 07 acontece duas vezes, distinguido pelo offset.
+    const timeZone = 'America/St_Johns';
+    const slots = computeAvailableSlots({
+      ...base,
+      timeZone,
+      from: Temporal.PlainDate.from('2010-11-07'),
+      to: Temporal.PlainDate.from('2010-11-07'),
+      weeklySchedule: [{ isoWeekday: 7, start: '00:00', end: '24:00' }],
+      granularityMinutes: 15,
+      clock: fixedClock('2010-11-01T00:00:00Z'),
+    });
+    expect(view(slots.slice(0, 3))).toEqual([
+      {
+        start: '2010-11-07T02:30:00Z',
+        localDate: '2010-11-07',
+        localTime: '00:00',
+        utcOffset: '-02:30',
+      },
+      {
+        start: '2010-11-07T03:30:00Z',
+        localDate: '2010-11-07',
+        localTime: '00:00',
+        utcOffset: '-03:30',
+      },
+      {
+        start: '2010-11-07T03:45:00Z',
+        localDate: '2010-11-07',
+        localTime: '00:15',
+        utcOffset: '-03:30',
+      },
+    ]);
+    for (const slot of slots) {
+      expect(slot.start.toZonedDateTimeISO(timeZone).toPlainDate().toString()).toBe('2010-11-07');
+    }
+  });
+
+  it('não deve oferecer a hora repetida da véspera quando o offset cai 3 h (Antarctica/Casey, 2010-03-05)', () => {
+    // 02:00 (+11) voltou para 23:00 do dia 04 (+08).
+    const timeZone = 'Antarctica/Casey';
+    const slots = computeAvailableSlots({
+      ...base,
+      timeZone,
+      from: Temporal.PlainDate.from('2010-03-05'),
+      to: Temporal.PlainDate.from('2010-03-05'),
+      weeklySchedule: [{ isoWeekday: 5, start: '00:00', end: '24:00' }],
+      service: singlePhaseService(60),
+      granularityMinutes: 60,
+      clock: fixedClock('2010-03-01T00:00:00Z'),
+    });
+    expect(slots.slice(0, 4).map((s) => `${s.localDate} ${s.localTime}${s.utcOffset}`)).toEqual([
+      '2010-03-05 00:00+11:00',
+      '2010-03-05 01:00+11:00',
+      '2010-03-05 00:00+08:00',
+      '2010-03-05 01:00+08:00',
+    ]);
+    expect(slots).toHaveLength(26); // 2 na primeira hora (+11) + 24 no relógio de +08
+    for (const slot of slots) {
+      expect(slot.start.toZonedDateTimeISO(timeZone).toPlainDate().toString()).toBe('2010-03-05');
+    }
+  });
+
   it('não deve oferecer nada num dia local que não existiu (Pacific/Apia, 2011-12-30)', () => {
     const slots = computeAvailableSlots({
       ...base,
@@ -516,6 +595,99 @@ describe('computeAvailableSlots: pureza e validação de entrada', () => {
       to: TUESDAY.add({ days: MAX_RANGE_DAYS - 1 }),
     });
     expect(slots.length).toBeGreaterThan(16);
+  });
+});
+
+describe('computeAvailableSlots: teto de trabalho por consulta', () => {
+  // O custo cresce com datas x inícios da grade por dia, não só com as datas: o teto limita
+  // o produto. Turno curto aqui porque o que se testa é a validação, não o volume.
+  const query = (days: number, granularityMinutes: number): AvailabilityInput => ({
+    ...base,
+    to: TUESDAY.add({ days: days - 1 }),
+    granularityMinutes,
+    weeklySchedule: [{ isoWeekday: 2, start: '09:00', end: '10:00' }],
+  });
+  const errorOf = (input: AvailabilityInput): unknown => {
+    try {
+      computeAvailableSlots(input);
+    } catch (error) {
+      return error;
+    }
+    return undefined;
+  };
+
+  it('deve equivaler a 70 dias na grade de 5 min (o menor passo que o banco permite)', () => {
+    expect(MAX_CANDIDATE_STARTS).toBe(70 * (1440 / 5));
+  });
+
+  it.each([
+    ['grade de 5 min', 5, 70],
+    ['grade de 1 min', 1, 14],
+    ['grade de 15 min', 15, 210],
+    ['grade de 7 min (206 inícios por dia, arredondado para cima)', 7, 97],
+  ])('deve aceitar o teto exato e recusar um dia a mais: %s', (_label, granularity, maxDays) => {
+    expect(errorOf(query(maxDays, granularity))).toBeUndefined();
+    const error = errorOf(query(maxDays + 1, granularity));
+    expect(error).toBeInstanceOf(SchedulingInputError);
+    expect(error).toHaveProperty('field', 'to');
+    expect(String(error)).toContain(String(MAX_CANDIDATE_STARTS));
+  });
+
+  it('deve recusar o pior caso de antes do teto: 366 dias na grade de 5 min', () => {
+    expect(errorOf(query(MAX_RANGE_DAYS, 5))).toBeInstanceOf(SchedulingInputError);
+  });
+
+  it('deve continuar aceitando 366 dias numa grade de 30 min', () => {
+    expect(errorOf(query(MAX_RANGE_DAYS, 30))).toBeUndefined();
+  });
+});
+
+describe('computeAvailableSlots: bordas superiores da validação', () => {
+  const errorOf = (override: Partial<AvailabilityInput>): unknown => {
+    try {
+      computeAvailableSlots({ ...base, ...override });
+    } catch (error) {
+      return error;
+    }
+    return undefined;
+  };
+
+  it('deve aceitar grade de 1440 min (um único início por dia, à meia-noite local)', () => {
+    const slots = computeAvailableSlots({
+      ...base,
+      weeklySchedule: [{ isoWeekday: 2, start: '00:00', end: '24:00' }],
+      granularityMinutes: 1440,
+    });
+    expect(view(slots)).toEqual([
+      {
+        start: '2026-11-03T03:00:00Z',
+        localDate: '2026-11-03',
+        localTime: '00:00',
+        utcOffset: '-03:00',
+      },
+    ]);
+  });
+
+  it.each([
+    ['minNoticeMinutes', { minNoticeMinutes: MAX_NOTICE_MINUTES }],
+    ['maxAdvanceMinutes', { maxAdvanceMinutes: MAX_NOTICE_MINUTES }],
+  ] as const)('deve aceitar %s no teto de 2 anos', (_field, override) => {
+    expect(errorOf(override)).toBeUndefined();
+  });
+
+  it('deve oferecer horários até o horizonte máximo de 2 anos', () => {
+    const slots = computeAvailableSlots({ ...base, maxAdvanceMinutes: MAX_NOTICE_MINUTES });
+    expect(slots).toHaveLength(16);
+  });
+
+  it.each([
+    ['minNoticeMinutes', { minNoticeMinutes: MAX_NOTICE_MINUTES + 1 }],
+    ['maxAdvanceMinutes', { maxAdvanceMinutes: MAX_NOTICE_MINUTES + 1 }],
+    ['granularityMinutes', { granularityMinutes: 1441 }],
+  ] as const)('deve recusar %s acima do teto, apontando o campo', (field, override) => {
+    const error = errorOf(override);
+    expect(error).toBeInstanceOf(SchedulingInputError);
+    expect(error).toHaveProperty('field', field);
   });
 });
 

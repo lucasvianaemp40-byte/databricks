@@ -2,9 +2,9 @@ import { eq, sql } from 'drizzle-orm';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../src/client';
-import { PG_ERROR, TenantIsolationError } from '../../src/errors';
+import { IdentifierConflictError, PG_ERROR, TenantIsolationError } from '../../src/errors';
 import { appointmentItems, appointments, customers, occupancies, tenants } from '../../src/schema';
-import { withTenant } from '../../src/tenant';
+import { type TenantTransaction, withTenant } from '../../src/tenant';
 import {
   captureSqlState,
   connectAsAdmin,
@@ -210,6 +210,7 @@ describe('isolamento multi-tenant (RLS) com o papel app_user', () => {
             startsAt: new Date('2026-12-02T12:00:00Z'),
             endsAt: new Date('2026-12-02T13:00:00Z'),
             localStartsAt: '2026-12-02 09:00:00',
+            localUtcOffsetSeconds: -3 * 60 * 60,
             timezone: 'America/Sao_Paulo',
             idempotencyKey: randomIdempotencyKey(),
           }),
@@ -227,6 +228,7 @@ describe('isolamento multi-tenant (RLS) com o papel app_user', () => {
             staffId: staffOfA,
             serviceName: 'Corte',
             durationMin: 60,
+            phases: [{ kind: 'work', minutes: 60 }],
             priceCents: 1,
             commissionBps: 0,
             startsAt: new Date('2026-12-02T12:00:00Z'),
@@ -274,5 +276,49 @@ describe('isolamento multi-tenant (RLS) com o papel app_user', () => {
         tx.delete(customers).where(eq(customers.id, tenantA.customerId)),
       ),
     ).rejects.toBeInstanceOf(TenantIsolationError);
+  });
+
+  it('app_worker só altera o status do agendamento: não move horário, cliente nem ocupação', async () => {
+    const attempts = [
+      (tx: TenantTransaction) =>
+        tx
+          .update(appointments)
+          .set({ startsAt: new Date('2026-12-01T15:00:00Z') })
+          .where(eq(appointments.id, tenantA.appointmentId)),
+      (tx: TenantTransaction) =>
+        tx
+          .update(appointments)
+          .set({ customerId: tenantA.customerId, idempotencyKey: randomIdempotencyKey() })
+          .where(eq(appointments.id, tenantA.appointmentId)),
+      (tx: TenantTransaction) =>
+        tx
+          .update(occupancies)
+          .set({ staffId: tenantA.staffIds[1] })
+          .where(eq(occupancies.appointmentId, tenantA.appointmentId)),
+    ];
+    for (const attempt of attempts) {
+      await expect(withTenant(worker, tenantA.tenantId, attempt)).rejects.toBeInstanceOf(
+        TenantIsolationError,
+      );
+    }
+  });
+
+  it('PK global: INSERT com o id de outro tenant é recusado sem confirmar existência nem tocar a linha', async () => {
+    const before = await countRowsOf(tenantB.tenantId);
+    const { rows: original } = await admin.query<{ full_name: string }>(
+      'SELECT full_name FROM app.customers WHERE id = $1',
+      [tenantB.customerId],
+    );
+    await expect(
+      withTenant(db, tenantA.tenantId, (tx) =>
+        tx.insert(customers).values({ id: tenantB.customerId, fullName: 'Sonda' }),
+      ),
+    ).rejects.toBeInstanceOf(IdentifierConflictError);
+    expect(await countRowsOf(tenantB.tenantId)).toEqual(before);
+    const { rows: after } = await admin.query<{ full_name: string }>(
+      'SELECT full_name FROM app.customers WHERE id = $1',
+      [tenantB.customerId],
+    );
+    expect(after).toEqual(original);
   });
 });

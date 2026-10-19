@@ -47,6 +47,12 @@ Relato de vulnerabilidade: [SECURITY.md](../../SECURITY.md).
       incluído na exportação e na anonimização.
 - [ ] Teste negativo cross-tenant para todo acesso novo a dado. Testes de autorização positivos
       e negativos.
+- [ ] Todo acesso a dado termina dentro do callback de `withTenant` (nada de `after()`,
+      `setTimeout` ou builder devolvido; `Promise.allSettled` em vez de `Promise.all` com ramos
+      que podem falhar). `id` e `tenant_id` nunca vêm do cliente em INSERT ou upsert, e
+      `IdentifierConflictError` vira 404/409 genérico.
+- [ ] Nenhum erro do banco cru em log (o `DrizzleQueryError` e o `cause` trazem os parâmetros
+      da consulta).
 - [ ] Chamada de rede de saída só pelo `safeFetch` (quando existir).
 - [ ] Threat model atualizado quando a feature tocar dado pessoal, pagamento, autenticação ou
       página pública.

@@ -14,7 +14,8 @@ O Proxy do Next 16 (`src/proxy.ts`) gera um **nonce de 128 bits** (`crypto.getRa
 base64) a cada requisição e monta a CSP com uma função pura (`buildContentSecurityPolicy`). A
 mesma política vai no cabeçalho da **requisição**, de onde o Next extrai o nonce e o aplica aos
 próprios scripts, e no da **resposta**. O Proxy sobrescreve qualquer `x-nonce` ou CSP enviado
-pelo cliente (testado).
+pelo cliente em todo documento HTML, inclusive a página 404 e caminhos sob `/_next/*` (testado
+no E2E).
 
 | Diretiva | Produção | Desenvolvimento (`NODE_ENV=development` explícito) |
 |---|---|---|
@@ -46,8 +47,15 @@ Decisões:
   por nonce.
 - **Enforce desde o início**, sem fase Report-Only. O app é novo e não tem legado. O endpoint de
   relatórios (`report-to`) entra junto com o Sentry.
-- **Matcher do Proxy:** tudo, inclusive `/api`, exceto `_next/static`, `_next/image`,
-  `favicon.ico` e prefetches do `<Link>`.
+- **Matcher do Proxy:** `/((?!_next/static/).*)`, ou seja, tudo, inclusive `/api`,
+  `/_next/image` e os prefetches do `<Link>`, exceto os assets com hash **dentro** de
+  `/_next/static/` (arquivo ausente ali devolve 404 `text/plain`, sem HTML). O matcher antigo
+  (`_next/static|_next/image|favicon.ico`, prefixo sem âncora e `.` sem escape, mais um
+  `missing` para os cabeçalhos de prefetch) deixava sem CSP a página 404 em caminhos como
+  `/favicon.ico.bak`, `/_next/staticX` e `/favicon-ico-studio`, e todo HTML pedido com um
+  cabeçalho de prefetch, que o cliente controla. Nesses casos o Next ainda aceitava o nonce
+  enviado pelo cliente. O teste unitário compila o matcher com as regras do próprio Next
+  (`unstable_doesMiddlewareMatch`) e o E2E "cobertura do Proxy" confere a CSP nesses caminhos.
 - **Sem recursos de terceiros** (fontes, imagens, scripts). Assim nenhum IP de visitante vai
   para outro controlador (LGPD) e a CSP continua `'self'`. Quando o Turnstile entrar, ele exige
   `frame-src https://challenges.cloudflare.com` e o nonce no `<Script>`. Quando o Sentry
@@ -55,22 +63,33 @@ Decisões:
 
 ## 2. Cabeçalhos estáticos [fundação]
 
-Definidos em `headers.ts` e aplicados a toda resposta pelo `next.config.ts`:
+Definidos em `headers.ts` e aplicados pelo `next.config.ts` a toda resposta gerada pelo Next,
+inclusive assets. Exceções, fora do alcance do app:
+
+- erros do parser HTTP do Node (`TRACK`, requisição malformada) saem como 400 sem cabeçalhos;
+- `TRACE` e `CONNECT` falham no adaptador do Proxy do Next 16.4 (o Fetch proíbe esses métodos
+  num `Request`) e saem como 500 sem cabeçalhos, antes de `proxy()` rodar. O corpo é fixo,
+  sem eco da requisição nem stack (E2E "método TRACE").
+
+**Na hospedagem, bloqueie `TRACE`, `TRACK` e `CONNECT` com 405 na borda** (CDN, Vercel Firewall
+ou reverse proxy) antes de expor o app [planejado; não verificado se a Vercel já os recusa].
 
 | Cabeçalho | Valor | Motivo |
 |---|---|---|
 | `Strict-Transport-Security` | `max-age=63072000; includeSubDomains` (2 anos), **só no build de produção** | ASVS 3.4.1 L2. Em `next dev` com HTTPS local fixaria HTTPS em `localhost`. Sem `preload`: decidir quando o domínio definitivo existir, porque entrar na lista é difícil de reverter |
 | `X-Content-Type-Options` | `nosniff` | ASVS 3.4.4 |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` | ASVS 3.4.5 |
-| `Permissions-Policy` | nega câmera, microfone, geolocalização, pagamento, USB, sensores e outros recursos | **Não** bloqueia `publickey-credentials-get/create` (passkeys) nem `otp-credentials` (WebOTP) |
+| `Permissions-Policy` | nega câmera, microfone, geolocalização, pagamento, USB, sensores e outros recursos | **Não** bloqueia `publickey-credentials-get/create` (passkeys) nem `otp-credentials` (WebOTP). Nome que o navegador não reconhece gera aviso no console ("Unrecognized feature"), e os E2E reprovam esse aviso. Exceção tolerada: `bluetooth`, que o Chromium do Linux não reconhece, mas o Chrome do Android, Windows e macOS sim |
 | `Cross-Origin-Opener-Policy` | `same-origin` | ASVS 3.4.8 (nível 3, barato) |
 | `Cross-Origin-Resource-Policy` | `same-site` | isolamento de recursos |
 | `X-Frame-Options` | `DENY` | legado. O controle efetivo é `frame-ancestors 'none'` |
 | (ausente) `X-Powered-By` | `poweredByHeader: false` | não anuncia o framework |
 
 Outros pontos implementados: `/api/health` com `Cache-Control: no-store` e sem versão;
-`noindex, nofollow` fora de `APP_ENV=production`; `images.remotePatterns` vazio, o que reduz a
-superfície do otimizador de imagens, alvo de vários advisories do Next.
+`noindex, nofollow` fora de `APP_ENV=production`; otimizador de imagens desligado
+(`images.unoptimized: true`): `/_next/image` responde a página 404 do app, com CSP, e o
+otimizador, alvo de vários advisories do Next, sai do caminho das requisições. O antigo
+`images.remotePatterns: []` não fazia nada, porque já é o padrão do Next.
 
 ## 3. Planejado (entra com autenticação e páginas autenticadas)
 
@@ -107,8 +126,8 @@ Configuração prevista para o Better Auth ([ADR-0004](../adr/0004-autenticacao-
 
 | Camada | Teste |
 |---|---|
-| Unit (Vitest) | `csp.test.ts` (diretivas por modo, nonce inválido recusado), `headers.test.ts`, `nonce.test.ts`, `proxy.test.ts` (nonce novo por requisição, `x-nonce` forjado descartado, matcher) |
-| E2E (Playwright) | `security-headers.spec.ts`: nonce diferente por requisição e presente em todos os `<script>`, nonce forjado ignorado, todos os cabeçalhos, health `no-store`, sem `X-Powered-By`. Uma fixture reprova qualquer erro de console, o que pega violação de CSP |
+| Unit (Vitest) | `csp.test.ts` (diretivas por modo, nonce inválido recusado), `headers.test.ts`, `nonce.test.ts`, `proxy.test.ts` (nonce novo por requisição, `x-nonce` forjado descartado, matcher compilado com as regras do Next, com casos que devem e que não devem casar), `next-config.test.ts` (otimizador de imagens desligado) |
+| E2E (Playwright) | `security-headers.spec.ts`: nonce diferente por requisição e presente em todos os `<script>`, nonce forjado ignorado, CSP nos caminhos que o matcher antigo deixava de fora e com cabeçalhos de prefetch, `/_next/image` desligado, `TRACE` sem eco nem stack, todos os cabeçalhos, health `no-store`, sem `X-Powered-By`. Uma fixture reprova qualquer erro de console e aviso de `Permissions-Policy`, o que pega violação de CSP (`console-guard.spec.ts` testa o classificador) |
 | DAST | ZAP baseline ([`dast.yml`](../../.github/workflows/dast.yml)) contra o build de produção, com as regras de [`.zap/rules.tsv`](../../.zap/rules.tsv): CSP, anti-clickjacking, `nosniff`, `Permissions-Policy`, `X-Powered-By`, divulgação de erro e PII como `FAIL`. Ainda não é check obrigatório (em calibração) |
 | Staging (planejado) | HSTS e cookies sob HTTPS real |
 

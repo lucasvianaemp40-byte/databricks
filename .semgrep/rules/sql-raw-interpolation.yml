@@ -26,19 +26,37 @@ rules:
       que não seja literal do código.
     patterns:
       - pattern-either:
-          # sql.raw só aceita literal fixo do código.
+          # sql.raw só aceita literal fixo do código, inclusive com alias
+          # (import { sql as s }) ou namespace (import * as orm; orm.sql.raw).
           - patterns:
-              - pattern: $SQL.raw($ARG)
-              - metavariable-regex:
-                  metavariable: $SQL
-                  regex: ^sql$
-              - pattern-not: $SQL.raw("...")
-          # Template com ${...} ou concatenação passados direto ao driver/ORM.
+              - pattern-either:
+                  - patterns:
+                      - pattern: $SQL.raw($ARG)
+                      - metavariable-regex:
+                          metavariable: $SQL
+                          regex: ^sql$
+                  - patterns:
+                      - pattern-inside: |
+                          import { sql as $SQL } from 'drizzle-orm';
+                          ...
+                      - pattern: $SQL.raw($ARG)
+                  - patterns:
+                      - pattern-inside: |
+                          import * as $NS from 'drizzle-orm';
+                          ...
+                      - pattern: $NS.sql.raw($ARG)
+              - pattern-not: $X.raw("...")
+          # Template com ${...} ou concatenação escritos direto como texto da consulta: 1º
+          # argumento ou `text` do objeto de configuração do node-postgres. Texto montado antes
+          # numa variável é coberto pela regra irmã sql-string-taint.
           - patterns:
               - pattern-either:
                   - pattern: $DB.$METHOD(`...${$EXPR}...`, ...)
                   - pattern: $DB.$METHOD("..." + $EXPR, ...)
                   - pattern: $DB.$METHOD($EXPR + "...", ...)
+                  - pattern: '$DB.$METHOD({..., text: `...${$EXPR}...`, ...}, ...)'
+                  - pattern: '$DB.$METHOD({..., text: "..." + $EXPR, ...}, ...)'
+                  - pattern: '$DB.$METHOD({..., text: $EXPR + "...", ...}, ...)'
               - metavariable-regex:
                   metavariable: $METHOD
                   regex: ^(query|execute|unsafe|\$executeRawUnsafe|\$queryRawUnsafe)$

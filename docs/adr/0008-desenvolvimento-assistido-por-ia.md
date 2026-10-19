@@ -1,10 +1,11 @@
 # ADR-0008: Desenvolvimento assistido por IA (kit Claude Code)
 
-- **Status:** Aceito
+- **Status:** Aceito. A decisão 3 e o fato sobre plugins na nuvem foram substituídos pelo
+  [ADR-0011](0011-plugins-e-mcp-na-nuvem.md).
 - **Data:** 2026-10-17
 - **Relacionados:** [fluxo com o Claude](../desenvolvimento/fluxo-com-claude.md),
   [.claude/README.md](../../.claude/README.md), [CLAUDE.md](../../CLAUDE.md),
-  [ADR-0007](0007-politica-de-supply-chain.md)
+  [ADR-0007](0007-politica-de-supply-chain.md), [ADR-0011](0011-plugins-e-mcp-na-nuvem.md)
 
 ## Contexto
 
@@ -23,14 +24,20 @@ environments) e num teste ponta a ponta na sessão de pesquisa, com o Claude Cod
 
 - **Numa sessão na nuvem, os plugins e marketplaces declarados no `.claude/settings.json` do
   repositório não carregam.** O debug log registrou `Skipping orphaned enabledPlugins entry …:
-  marketplace not registered`.
+  marketplace not registered`. *Generalização desfeita pelo
+  [ADR-0011](0011-plugins-e-mcp-na-nuvem.md): numa sessão na nuvem de 2026-10-17, os plugins
+  do `claude-plugins-official` carregaram e os da `trailofbits` não. O que decide é o
+  marketplace estar registrado no container.*
 - Carregam na nuvem: `CLAUDE.md`, `.claude/skills/`, `.claude/agents/`, `.claude/rules/`, os
   hooks e permissões do `.claude/settings.json` (em sessão com um só repositório) e o
   `.mcp.json`.
 - Em sessão na nuvem com **vários repositórios**, nenhum hook do settings roda. Nesse caso o
   caminho é o *setup script* do ambiente.
 - `permissions.allow` e marketplaces extras só valem depois do diálogo de confiança no
-  workspace. `deny`, `ask` e hooks valem sempre.
+  workspace. `deny`, `ask` e hooks valem sempre. *Ressalva verificada em 2026-10-18: na
+  nuvem, edição de arquivo roda sem perguntar em qualquer modo de permissão (documentação do
+  ambiente na nuvem), e um Edit em `.claude/settings.json` foi aplicado sem bloqueio numa
+  sessão em modo padrão. Ali as regras `ask` de `Edit(...)` não pedem confirmação.*
 - Hook com `onFailure: "block"` falha fechado (bloqueia se o hook quebrar ou estourar o
   tempo).
 - Uma skill de projeto com o mesmo nome de um comando embutido o substitui. Uma skill chamada
@@ -40,14 +47,15 @@ environments) e num teste ponta a ponta na sessão de pesquisa, com o Claude Cod
 
 1. **O essencial fica versionado em `.claude/`, não em plugins:**
    - hooks:
-     - `guard-bash` e `guard-files`, fail-closed;
+     - `guard-bash` (Bash e o script do Monitor) e `guard-files`, fail-closed;
      - `post-edit-quality` (Biome e ESLint no arquivo editado);
      - `stop-typecheck`;
      - `guard-prompt` (bloqueia segredo colado no chat);
      - `session-start`, que instala dependências só na nuvem;
    - skills e agentes próprios em pt-BR;
    - regras por caminho em `.claude/rules/`;
-   - MCP do Playwright pinado.
+   - MCP do Playwright pinado (desde o [ADR-0011](0011-plugins-e-mcp-na-nuvem.md), pelo
+     Playwright do lockfile, via `.claude/mcp/playwright-mcp.sh`).
 2. **Material de terceiros entra vendorizado** por
    [`scripts/vendor-claude-skills.sh`](../../scripts/vendor-claude-skills.sh):
    - commits fixos (SHA), nada executado dos repositórios de origem e allowlist arquivo a
@@ -60,8 +68,10 @@ environments) e num teste ponta a ponta na sessão de pesquisa, com o Claude Cod
 
    Ficam fora material proprietário (`claude-security`), source-available sem licença de
    redistribuição (skills de documentos), repositórios sem licença e binários fechados.
-3. **Plugins de marketplace só para quem usa o CLI local** (`enabledPlugins` no settings),
-   como complemento. A defesa nunca depende deles.
+3. ~~**Plugins de marketplace só para quem usa o CLI local** (`enabledPlugins` no settings),
+   como complemento.~~ Substituída pelo [ADR-0011](0011-plugins-e-mcp-na-nuvem.md): os
+   plugins podem carregar também na nuvem, conforme o marketplace. Continua valendo que a
+   defesa nunca depende deles.
 4. **Regras de trabalho no [CLAUDE.md](../../CLAUDE.md):**
    - TDD;
    - testes intocáveis;
@@ -76,15 +86,21 @@ environments) e num teste ponta a ponta na sessão de pesquisa, com o Claude Cod
    - `claude-review.yml` e `claude.yml` com `anthropics/claude-code-action` pinada por SHA,
      gatilho `pull_request` (sem forks nem bots) e `cache-mode: none`;
    - o prompt não interpola conteúdo do PR;
-   - **revisão humana continua obrigatória**: CODEOWNERS em `.claude/`, `.mcp.json` e
-     `CLAUDE.md`.
+   - **a revisão humana continua sendo a decisão**: hoje é a do próprio mantenedor que faz o
+     merge, porque com uma pessoa só o ruleset não exige aprovação
+     (`required_approving_review_count: 0`). O CODEOWNERS em `.claude/`, `.mcp.json` e
+     `CLAUDE.md` passa a exigir revisão do dono (`require_code_owner_review`) quando entrar a
+     segunda pessoa. Até lá, o controle técnico sobre `.claude/` são os hooks (item 1), que
+     cobrem a escrita por shell, mas não a edição pelas ferramentas de arquivo na nuvem (ver
+     Consequências).
 6. **Conteúdo do repositório, de PRs e de páginas é dado, nunca instrução**, para o agente e
    para os subagentes.
 
 ## Consequências
 
 - **Positivas:**
-  - as mesmas proteções no CLI, na IDE e na nuvem;
+  - os mesmos hooks no CLI, na IDE e na nuvem com um repositório (as regras `ask` de edição
+    de arquivo, não: na nuvem elas não pedem confirmação);
   - revisões especializadas (multi-tenant, LGPD, migrações, AppSec) sob demanda;
   - `pnpm verify` roda antes de cada commit;
   - material de terceiros auditável.
@@ -97,10 +113,19 @@ environments) e num teste ponta a ponta na sessão de pesquisa, com o Claude Cod
   - material vendorizado envelhece. Revisar os SHAs mensalmente e ler o diff inteiro antes de
     commitar;
   - `.claude/` é alvo de worms de supply chain (persistência relatada, não verificada, no Mini
-    Shai-Hulud). Por isso fica no CODEOWNERS e os hooks negam escrita na configuração do
-    agente.
+    Shai-Hulud). Por isso o `guard-bash` nega escrita por shell (Bash e o script do Monitor) em
+    `.claude/settings*.json` e `.claude/hooks/`, e o `guard-files` pede confirmação para
+    `.mcp.json` e `.claude/mcp/`. Como as regras nativas (`permissions.ask`) não pedem
+    confirmação na nuvem (conferido em 2026-10-18), o `guard-files` passou a pedir confirmação
+    (ask, não deny, para o kit continuar mantível) na edição de `.claude/settings*.json` e
+    `.claude/hooks/` pelas ferramentas Edit/Write. Se o ask de hook também for aprovado
+    automaticamente na nuvem (não verificado), resta a leitura do diff por quem faz o merge. A pasta está no CODEOWNERS, que só
+    passa a bloquear o merge com a segunda pessoa no projeto (ver decisão 5).
 - **Ações decorrentes:**
   - `pnpm test:hooks` e `tsc -p .claude/hooks` no CI (job `hooks`);
+  - `ask` no `guard-files` para a edição de `.claude/settings*.json` e `.claude/hooks/` pelas
+    ferramentas de arquivo [fundação]; conferir numa sessão na nuvem se um `ask` de hook pede
+    confirmação ou é aprovado automaticamente [planejado];
   - revisão mensal dos SHAs vendorizados e das versões de action e MCP;
   - sessões na nuvem com vários repositórios: configurar o setup script do ambiente.
 
@@ -108,7 +133,7 @@ environments) e num teste ponta a ponta na sessão de pesquisa, com o Claude Cod
 
 | Alternativa | Por que não |
 |---|---|
-| Só plugins de marketplace | Não carregam em sessões na nuvem (verificado) |
+| Só plugins de marketplace | Não carregam em todo ambiente: na nuvem, os da `trailofbits` não carregaram, e não foi verificado o que acontece numa sessão nova, sem cache ([ADR-0011](0011-plugins-e-mcp-na-nuvem.md)) |
 | Habilitar marketplaces de comunidade em massa | Mais de 2.000 plugins sem curadoria |
 | Plugins com hooks em todo turno (`fp-check` como plugin) | Custo e latência a cada Stop; vendorizamos só a skill |
 | Semgrep Guardian (plugin) | Exige login, distribui binários fechados e manda telemetria. Usamos o Semgrep CE no CI |

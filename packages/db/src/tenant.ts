@@ -1,7 +1,11 @@
 import { sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import type { PgTransactionConfig } from 'drizzle-orm/pg-core';
+import type pg from 'pg';
 import type { Database } from './client';
-import { mapDatabaseError } from './errors';
+import { mapDatabaseError, TransactionClosedError } from './errors';
 import { isUuid } from './ids';
+import * as schema from './schema';
 
 /** Transação recebida pelo callback de `withTenant` (mesma API do `db` do Drizzle). */
 export type TenantTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
@@ -45,12 +49,78 @@ function parseAuditActor(actor: AuditActor): AuditActor {
   return actor;
 }
 
+/** Comandos com que o Drizzle encerra a transação (`sql`commit`` / `sql`rollback``). */
+const TRANSACTION_END: ReadonlySet<string> = new Set(['commit', 'rollback']);
+
+interface GuardedConnection {
+  /** O que o Drizzle recebe como cliente: só expõe `query`, e só enquanto a transação vive. */
+  readonly client: pg.PoolClient;
+  /** O callback terminou: daqui em diante só passam o COMMIT/ROLLBACK do próprio Drizzle. */
+  finishCallback(): void;
+  /** A transação acabou: toda consulta é recusada sem tocar na conexão. */
+  close(): void;
+  /** A conexão emitiu erro (queda, failover, pg_terminate_backend): nunca volta ao pool. */
+  markBroken(): void;
+  /** A conexão pode voltar ao pool (transação encerrada, nenhuma consulta pendente, sem erro). */
+  reusable(): boolean;
+}
+
 /**
- * ÚNICA porta de acesso a dados de tenant. Abre uma transação, define o contexto com
- * `set_config(..., true)` (escopo da transação: seguro com pool e com PgBouncer em modo
- * transaction) e executa `fn`. A RLS do banco filtra/recusa tudo que não for do tenant.
+ * Embrulha o PoolClient da transação. O `tx` do Drizzle guarda referência direta ao cliente
+ * e o node-postgres aceita `query` num cliente já devolvido ao pool: sem esta guarda, uma
+ * consulta atrasada rodaria na conexão de outra requisição, com o `app.tenant_id` DELA.
+ */
+function guardConnection(connection: pg.PoolClient): GuardedConnection {
+  let phase: 'open' | 'finishing' | 'closed' = 'open';
+  let inFlight = 0;
+  let ended = false;
+  let broken = false;
+  const guarded = {
+    query(config: string | pg.QueryConfig, values?: unknown[]): Promise<pg.QueryResult> {
+      const text = (typeof config === 'string' ? config : config.text).trim().toLowerCase();
+      const ends = TRANSACTION_END.has(text);
+      if (phase === 'closed' || (phase === 'finishing' && !ends)) {
+        return Promise.reject(new TransactionClosedError());
+      }
+      inFlight += 1;
+      return connection
+        .query(config, values)
+        .then((result) => {
+          ended ||= ends;
+          return result;
+        })
+        .finally(() => {
+          inFlight -= 1;
+        });
+    },
+  };
+  return {
+    client: guarded as unknown as pg.PoolClient,
+    finishCallback() {
+      if (phase === 'open') {
+        phase = 'finishing';
+      }
+    },
+    close() {
+      phase = 'closed';
+    },
+    markBroken() {
+      broken = true;
+    },
+    reusable: () => ended && inFlight === 0 && !broken,
+  };
+}
+
+/**
+ * ÚNICA porta de acesso a dados de tenant. Abre uma transação READ COMMITTED, define o
+ * contexto com `set_config(..., true)` (escopo da transação: seguro com pool e com PgBouncer
+ * em modo transaction) e executa `fn`. A RLS do banco filtra/recusa tudo que não for do tenant.
  *
  * - O `tenantId` vem SEMPRE da sessão autenticada (membership), nunca do corpo/URL.
+ * - O `tx` só vale enquanto `fn` executa. Toda consulta precisa terminar antes de `fn`
+ *   resolver: nada de fire-and-forget, `after()` ou builder devolvido para executar depois, e
+ *   em `Promise.all` com ramos que podem falhar use `Promise.allSettled` (ou aguarde cada
+ *   ramo). Depois do fim, o `tx` recusa tudo com `TransactionClosedError` sem tocar no banco.
  * - Também fixa `TimeZone = UTC` e `DateStyle = ISO` na transação, para que timestamptz
  *   chegue em um formato que o Drizzle converte para `Date` sem ambiguidade.
  * - Erros do banco saem traduzidos (`SlotUnavailableError`, `TenantIsolationError`,
@@ -69,10 +139,31 @@ export async function withTenant<T>(
   if (!('$client' in db)) {
     throw new TypeError('withTenant: passe o banco (createDb), não uma transação');
   }
+  // Nível fixo: o FOR SHARE dos triggers de ocupação só serializa em READ COMMITTED, e o
+  // `begin isolation level ...` vence o default_transaction_isolation do banco/papel/URL.
+  const config: PgTransactionConfig = {
+    isolationLevel: 'read committed',
+    ...(options.readOnly === true ? { accessMode: 'read only' as const } : {}),
+  };
 
+  let connection: pg.PoolClient;
   try {
-    return await db.transaction(
-      async (tx) => {
+    connection = await db.$client.connect();
+  } catch (error) {
+    throw mapDatabaseError(error);
+  }
+  const guard = guardConnection(connection);
+  // Emprestada, a conexão fica sem o ouvinte de 'error' do pool (o pg-pool o tira no acquire e
+  // o devolve no release). Sem este, uma queda entre consultas (failover, pg_terminate_backend)
+  // emitiria 'error' sem ouvinte e derrubaria o processo. O erro em si não se perde: a próxima
+  // consulta, ou o COMMIT, falha, e a conexão é destruída no fim.
+  const onConnectionError = (): void => {
+    guard.markBroken();
+  };
+  connection.on('error', onConnectionError);
+  try {
+    return await drizzle({ client: guard.client, schema }).transaction(async (tx) => {
+      try {
         await tx.execute(
           sql`select set_config('app.tenant_id', ${id}, true),
                      set_config('app.actor_type', ${actor?.type ?? ''}, true),
@@ -81,10 +172,21 @@ export async function withTenant<T>(
                      set_config('DateStyle', 'ISO, YMD', true)`,
         );
         return await fn(tx);
-      },
-      options.readOnly === true ? { accessMode: 'read only' } : undefined,
-    );
+      } finally {
+        guard.finishCallback();
+      }
+    }, config);
   } catch (error) {
     throw mapDatabaseError(error);
+  } finally {
+    guard.close();
+    connection.off('error', onConnectionError);
+    // Transação sem desfecho confirmado (BEGIN/COMMIT/ROLLBACK falhou), consulta pendente ou
+    // erro na conexão: ela é destruída em vez de voltar ao pool.
+    connection.release(
+      guard.reusable()
+        ? undefined
+        : new Error('withTenant: conexão descartada (transação sem desfecho limpo)'),
+    );
   }
 }

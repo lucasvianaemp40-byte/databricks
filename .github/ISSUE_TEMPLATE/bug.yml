@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Obrigado por relatar. **Falha de segurança ou exposição de dado pessoal não vai aqui**:
-        siga o [SECURITY.md](../blob/main/SECURITY.md) (relato privado).
+        siga a [política de segurança](../security/policy) (relato privado).
 
         Não cole dados reais de clientes (nome, telefone, e-mail, CPF) nem tokens, senhas ou
         cookies. Use dados fictícios e oculte o que for preciso nos prints.

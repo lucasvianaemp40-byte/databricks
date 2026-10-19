@@ -39,13 +39,16 @@ export function proxy(request: NextRequest): NextResponse {
 export const config = {
   matcher: [
     {
-      // Tudo, inclusive /api, exceto assets estáticos com hash (não são documentos e não
-      // executam no contexto da página). Prefetches do <Link> não precisam de nonce novo.
-      source: '/((?!_next/static|_next/image|favicon.ico).*)',
-      missing: [
-        { type: 'header', key: 'next-router-prefetch' },
-        { type: 'header', key: 'purpose', value: 'prefetch' },
-      ],
+      // Tudo, inclusive /api, exceto os assets com hash DENTRO de /_next/static/ (não são
+      // documentos; um arquivo ausente ali devolve 404 text/plain, sem HTML). A barra final no
+      // lookahead é obrigatória: sem ela, /_next/staticX, /_next/static-evil/… e um futuro
+      // /[slug] com esse prefixo escapariam do Proxy. Nada de '.' sem escape nem exclusões por
+      // prefixo solto (o antigo `favicon.ico` deixava /favicon-ico-studio sem CSP).
+      // /_next/image fica coberto: com `images.unoptimized` ele responde a página 404 do app.
+      // Sem `missing` para prefetch: next-router-prefetch e purpose são cabeçalhos que o
+      // cliente controla, e com eles o HTML completo sairia sem CSP. Um nonce por prefetch
+      // custa pouco (toda página já é dinâmica).
+      source: '/((?!_next/static/).*)',
     },
   ],
 };

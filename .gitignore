@@ -25,6 +25,7 @@ test-results/
 
 # Saídas locais de ferramentas (Playwright CLI/MCP, scanners)
 .playwright-cli/
+.playwright-mcp/
 *.sarif
 sbom.cdx.json
 

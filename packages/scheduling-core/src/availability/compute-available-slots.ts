@@ -21,6 +21,8 @@ export type IsoWeekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
  * Turno da jornada semanal, em hora de parede do fuso da unidade.
  * O almoço é representado por dois turnos no mesmo dia. Turno que vira a meia-noite está
  * fora do escopo (use '24:00' como fim e '00:00' no dia seguinte; não se unem).
+ * Todos os turnos de uma consulta são da MESMA unidade (a do `timeZone`): turnos encostados
+ * são unidos, então misturar unidades deixaria um atendimento começar numa e terminar noutra.
  */
 export interface WorkShift {
   readonly isoWeekday: IsoWeekday;
@@ -42,9 +44,16 @@ export interface AvailabilityInput {
   readonly from: Temporal.PlainDate;
   /** Última data local consultada (inclusiva). No máximo {@link MAX_RANGE_DAYS} datas. */
   readonly to: Temporal.PlainDate;
+  /**
+   * Jornada do profissional NA UNIDADE CONSULTADA (`working_hours` filtrado por
+   * `location_id`). Faixas de outra unidade não entram: o motor une turnos encostados.
+   */
   readonly weeklySchedule: readonly WorkShift[];
   readonly service: ServiceDefinition;
-  /** Ocupações existentes do profissional (alocações ativas, já com os buffers delas). */
+  /**
+   * Ocupações ativas do profissional em TODAS as unidades (`occupancies` com `active`, já
+   * com os buffers delas): ele não pode estar em dois lugares ao mesmo tempo.
+   */
   readonly busy: readonly Interval[];
   /** Folgas, férias e bloqueios do profissional ou da unidade. */
   readonly timeOff: readonly Interval[];
@@ -75,11 +84,23 @@ export interface AvailableSlot {
   readonly utcOffset: string;
 }
 
-/** Limite de datas por consulta (defesa contra consultas abusivas: ASVS, limites de recurso). */
+/**
+ * Limite de datas por consulta (sanidade do intervalo). Sozinho NÃO limita o custo: ele
+ * cresce com datas x inícios da grade por dia; quem limita o trabalho é
+ * {@link MAX_CANDIDATE_STARTS}.
+ */
 export const MAX_RANGE_DAYS = 366;
 
+/**
+ * Teto de trabalho por consulta (ASVS 5.0 / OWASP API4, consumo de recursos): datas x
+ * ceil(1440 / granularidade) inícios candidatos. Equivale a 70 dias na grade de 5 min (o
+ * menor passo que o banco permite), 210 dias na de 15 min e 366 dias na de 30 min. Acima
+ * disso a consulta é recusada com `SchedulingInputError` no campo `to`: divida-a em páginas.
+ */
+export const MAX_CANDIDATE_STARTS = 70 * (MINUTES_PER_DAY / 5);
+
 /** Teto para antecedência e horizonte: 2 anos em minutos. */
-const MAX_NOTICE_MINUTES = 2 * 366 * MINUTES_PER_DAY;
+export const MAX_NOTICE_MINUTES = 2 * 366 * MINUTES_PER_DAY;
 
 interface ParsedShift {
   readonly isoWeekday: number;
@@ -190,12 +211,15 @@ function collectSlots(
   const localDate = frame.date.toString();
 
   for (const segment of frame.segments) {
-    const lo = Math.max(firstStartMs, segment.startMs);
-    const hi = Math.min(lastStartMs, segment.endMs - 1);
-    if (lo > hi) continue;
     // Neste trecho, relógio local = instante + offset. "Meia-noite local + k passos" no
     // relógio corresponde aos instantes base + k passos.
     const base = frame.wallMidnightMs - segment.offsetMs;
+    // Só instantes cujo relógio marca a data do quadro: [base, base + 24 h). Uma transição
+    // depois da meia-noite pode devolver o relógio à véspera (St. John's até 2010: 00:01 ->
+    // 23:01); esses instantes estão no quadro, mas não são horário deste dia (nem do anterior).
+    const lo = Math.max(firstStartMs, segment.startMs, base);
+    const hi = Math.min(lastStartMs, segment.endMs - 1, base + MINUTES_PER_DAY * MINUTE_MS - 1);
+    if (lo > hi) continue;
     for (let t = base + Math.ceil((lo - base) / stepMs) * stepMs; t <= hi; t += stepMs) {
       if (!isStaffFree(t, context)) continue;
       out.push({
@@ -253,6 +277,14 @@ function validateInput(input: AvailabilityInput): readonly ParsedShift[] {
     throw new SchedulingInputError('to', `consulta de ${days} datas; o máximo é ${MAX_RANGE_DAYS}`);
   }
   assertIntegerInRange('granularityMinutes', input.granularityMinutes, 1, MINUTES_PER_DAY);
+  const candidateStarts = days * Math.ceil(MINUTES_PER_DAY / input.granularityMinutes);
+  if (candidateStarts > MAX_CANDIDATE_STARTS) {
+    throw new SchedulingInputError(
+      'to',
+      `consulta de ${days} datas na grade de ${input.granularityMinutes} min = ` +
+        `${candidateStarts} inícios candidatos; o máximo é ${MAX_CANDIDATE_STARTS} (divida a consulta)`,
+    );
+  }
   assertIntegerInRange('minNoticeMinutes', input.minNoticeMinutes, 0, MAX_NOTICE_MINUTES);
   assertIntegerInRange('maxAdvanceMinutes', input.maxAdvanceMinutes, 0, MAX_NOTICE_MINUTES);
   assertIntervals('busy', input.busy);

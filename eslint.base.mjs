@@ -45,6 +45,58 @@ export const testFiles = [
   '**/e2e/**/*.{ts,tsx,mts}',
 ];
 
+const MACHINE_TIME_ZONE_MESSAGE =
+  'Data-hora sem Z/offset é lida no fuso do processo (UTC no servidor, outro no notebook): ' +
+  "escreva o instante com Z ou offset ('2026-10-17T13:00:00Z') ou converta o horário de " +
+  'parede com o fuso IANA da unidade (Temporal).';
+
+/** Data-hora ISO sem designador de fuso; só data ('2026-10-17') é UTC e fica de fora. */
+const FLOATING_DATE_TIME = String.raw`/^[+-]?\d{4,6}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/`;
+
+/** Fim de template literal com hora sem fuso, inclusive dinâmico (`${dia}T10:00`). */
+const FLOATING_TIME_SUFFIX = String.raw`/[Tt ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/`;
+
+/**
+ * Valem em todo o monorepo (fora do domínio puro também): texto de data-hora sem offset vira
+ * instante no fuso do PROCESSO (ECMA-262, Date Time String Format). `new Date(isoComOffset)`,
+ * só data, `new Date()` e `new Date(ms)` seguem permitidos fora do domínio puro. Espelha a
+ * regra server-timezone-date do Semgrep. Exportado para composição: redeclarar
+ * no-restricted-syntax SUBSTITUI as opções anteriores.
+ */
+export const machineTimeZoneRestrictedSyntax = [
+  {
+    selector: `NewExpression[callee.name='Date'] > Literal.arguments:first-child[value=${FLOATING_DATE_TIME}]`,
+    message: MACHINE_TIME_ZONE_MESSAGE,
+  },
+  {
+    selector: `NewExpression[callee.name='Date'] > TemplateLiteral.arguments:first-child > TemplateElement.quasis[tail=true][value.cooked=${FLOATING_TIME_SUFFIX}]`,
+    message: MACHINE_TIME_ZONE_MESSAGE,
+  },
+];
+
+/**
+ * Date.parse lê data-hora sem offset no fuso do processo e aceita formatos que dependem do
+ * motor. Como propriedade (e não seletor), pega também referência, `Date['parse']` e
+ * desestruturação. Exportado para composição, como o anterior.
+ */
+export const machineTimeZoneRestrictedProperties = [
+  {
+    object: 'Date',
+    property: 'parse',
+    message:
+      'Date.parse depende do fuso do processo e do motor: valide o texto com offset ' +
+      '(zod .datetime({ offset: true })) e use new Date(texto).getTime() ou Temporal.',
+  },
+];
+
+/**
+ * O piso de cobertura não se contorna com comentário: nenhuma dica de exclusão que o Vitest
+ * respeita (istanbul, c8 ou v8 seguidos de "ignore", e a do test runner do Node) passa no
+ * lint, em nenhum arquivo. O test-hygiene de cada pacote cobre o que um eslint-disable
+ * esconderia.
+ */
+const COVERAGE_HINT_TERMS = ['v8 ignore', 'c8 ignore', 'istanbul ignore', 'node:coverage'];
+
 /**
  * Base type-aware para um pacote TypeScript.
  * @param {{ tsconfigRootDir: string }} options diretório do pacote (use import.meta.dirname)
@@ -92,6 +144,19 @@ export function createBaseConfig({ tsconfigRootDir }) {
       rules: {
         // Ruído alto em TypeScript (todo acesso obj[k]); noUncheckedIndexedAccess cobre o risco real.
         'security/detect-object-injection': 'off',
+      },
+    },
+    {
+      name: 'salon/fuso-da-maquina',
+      rules: {
+        'no-restricted-syntax': ['error', ...machineTimeZoneRestrictedSyntax],
+        'no-restricted-properties': ['error', ...machineTimeZoneRestrictedProperties],
+      },
+    },
+    {
+      name: 'salon/cobertura-honesta',
+      rules: {
+        'no-warning-comments': ['error', { terms: COVERAGE_HINT_TERMS, location: 'anywhere' }],
       },
     },
     {
@@ -174,7 +239,12 @@ export function createPureDomainConfig({ files, ignores = [] }) {
     files,
     ignores,
     rules: {
-      'no-restricted-syntax': ['error', ...pureDomainRestrictedSyntax],
+      // Redeclarar SUBSTITUI as opções da base: por isso a composição com as regras de fuso.
+      'no-restricted-syntax': [
+        'error',
+        ...pureDomainRestrictedSyntax,
+        ...machineTimeZoneRestrictedSyntax,
+      ],
       'no-restricted-globals': [
         'error',
         ...[

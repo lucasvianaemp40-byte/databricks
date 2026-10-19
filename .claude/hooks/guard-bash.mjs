@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 // @ts-check
 /**
- * PreToolUse(Bash): defesa em profundidade além de permissions.deny/ask.
+ * PreToolUse(Bash|Monitor): defesa em profundidade além de permissions.deny/ask.
+ *
+ * O Monitor manda `tool_input.command` (script de shell que roda no mesmo ambiente do Bash,
+ * analisado aqui como um comando Bash) ou `tool_input.ws` (fonte WebSocket, sem shell), que
+ * passa sem decisão porque não há comando a analisar.
  *
  * Bloqueia (deny): comandos destrutivos, force-push, push para main/master, --no-verify e
  * desligamento de hooks, leitura/despejo de segredos e do ambiente, execução de script

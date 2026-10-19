@@ -8,7 +8,10 @@ describe('API pública de @salon/scheduling-core', () => {
         'APPOINTMENT_STATUSES',
         'AppointmentTransitionError',
         'INITIAL_APPOINTMENT_STATUSES',
+        'MAX_CANDIDATE_STARTS',
+        'MAX_NOTICE_MINUTES',
         'MAX_RANGE_DAYS',
+        'OCCUPANCY_KINDS',
         // biome-ignore lint/security/noSecrets: nome de export público, não é segredo.
         'SchedulingInputError',
         'allowedTransitions',
@@ -32,6 +35,7 @@ describe('API pública de @salon/scheduling-core', () => {
         'singlePhaseService',
         'sortIntervals',
         'staffBusyIntervals',
+        'staffOccupancySegments',
         'subtractIntervals',
         'systemClock',
         'transitionAppointmentStatus',
@@ -43,6 +47,7 @@ describe('API pública de @salon/scheduling-core', () => {
   it('não deve deixar constantes públicas mutáveis em tempo de execução', () => {
     expect(Object.isFrozen(core.APPOINTMENT_STATUSES)).toBe(true);
     expect(Object.isFrozen(core.INITIAL_APPOINTMENT_STATUSES)).toBe(true);
+    expect(Object.isFrozen(core.OCCUPANCY_KINDS)).toBe(true);
     expect(Object.isFrozen(core.allowedTransitions('pending'))).toBe(true);
     expect(Object.isFrozen(core.systemClock)).toBe(true);
     expect(Object.isFrozen(core.fixedClock('2026-11-03T12:00:00Z'))).toBe(true);

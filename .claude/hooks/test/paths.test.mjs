@@ -37,6 +37,28 @@ describe('classifySecretPath', () => {
     '.env*',
     '*.pem',
     '.env.[lp]*',
+    '[.]env',
+    'cred*.json',
+    'secrets.*',
+    'service*.json',
+    '~/.bash_history',
+    '/root/.zsh_history',
+    '~/.psql_history',
+    '~/.claude.json',
+    '/root/.claude/projects/-home-user-x/abc.jsonl',
+    '~/.claude/history.jsonl',
+    '~/.claude/session-env/abc/hook-0.sh',
+    '~/.claude/shell-snapshots/snapshot-bash.sh',
+    // /proc/*/environ: glob, task/<tid>, e caminho não normalizado.
+    '/proc/self/env*',
+    '/proc/self/envi[r]on',
+    '/proc/self/task/123/environ',
+    '/proc/self/task/*/environ',
+    '/proc/self/./environ',
+    '/proc//self/environ',
+    '/proc/1/task/1/environ',
+    '/proc/thread-self/environ',
+    '/proc/$$/environ',
   ];
   for (const p of secrets) {
     it(`segredo: ${p}`, () => assert.notEqual(classifySecretPath(p), null));
@@ -53,9 +75,21 @@ describe('classifySecretPath', () => {
     '/root/.ccr/ca-bundle.crt',
     'id_ed25519.pub',
     'src/keys.ts',
+    '/proc/self/status',
+    '/proc/self/cmdline',
+    '/proc/cpuinfo',
+    'environ',
     '*.ts',
     '*',
     '.*',
+    '*.json',
+    '**/*.json',
+    'packages/db/drizzle/meta/*.json',
+    '*.{ts,json}',
+    '~/.gitconfig',
+    '.claude/settings.json',
+    '.claude/hooks/guard-bash.mjs',
+    '/root/.claude/projects/-home-user-x/memory/MEMORY.md',
   ];
   for (const p of safe) {
     it(`não é segredo: ${p}`, () => assert.equal(classifySecretPath(p), null));
@@ -92,6 +126,28 @@ describe('isLockfile / protectedConfigLevel / isMigrationPath', () => {
     assert.equal(protectedConfigLevel('lefthook.yml'), 'ask');
     assert.equal(protectedConfigLevel('.mcp.json'), 'ask');
     assert.equal(protectedConfigLevel('.claude/skills/verify/SKILL.md'), null);
+  });
+
+  it('cobre todas as configurações locais que o lefthook 2 lê', () => {
+    for (const p of [
+      '.lefthook.yml',
+      '.lefthook-local.yml',
+      '.lefthook-local.yaml',
+      'lefthook-local.json',
+      'lefthook-local.jsonc',
+      'lefthook-local.toml',
+      '.lefthook-local.json',
+      'lefthook.toml',
+      '.config/lefthook-local.yml',
+      '.config/lefthook.yaml',
+    ]) {
+      assert.equal(protectedConfigLevel(p), 'ask', p);
+    }
+    assert.equal(protectedConfigLevel('docs/lefthook-notes.md'), null);
+  });
+
+  it('protege o wrapper do servidor MCP', () => {
+    assert.equal(protectedConfigLevel('.claude/mcp/playwright-mcp.sh'), 'ask');
   });
 
   it('reconhece migrações do drizzle e pastas migrations/', () => {

@@ -80,3 +80,23 @@ export function existsOnDefaultBranch(cwd, absPath) {
   const exists = git(root, ['cat-file', '-e', `${ref}:${rel}`]) !== null;
   return { exists, ref, rel };
 }
+
+/**
+ * Configuração efetiva que decide o destino de um `git push` sem refspec: remote.*.push,
+ * remote.*.mirror, push.default, branch.*.merge/pushRemote e remote.pushDefault.
+ * @param {string} cwd
+ * @returns {Array<[string, string]>}
+ */
+export function pushConfig(cwd) {
+  const out = git(cwd, [
+    'config',
+    '--get-regexp',
+    '^(remote\\..*\\.(push|mirror)|remote\\.pushdefault|push\\.default|branch\\..*\\.(merge|pushremote|remote))$',
+  ]);
+  if (!out) return [];
+  return out.split('\n').flatMap((line) => {
+    const space = line.indexOf(' ');
+    if (space <= 0) return [];
+    return [/** @type {[string, string]} */ ([line.slice(0, space), line.slice(space + 1)])];
+  });
+}

@@ -27,21 +27,29 @@ CREATE TABLE "app"."appointment_items" (
 	"staff_id" uuid NOT NULL,
 	"service_name" text NOT NULL,
 	"duration_min" smallint NOT NULL,
+	"phases" jsonb NOT NULL,
 	"price_cents" integer NOT NULL,
 	"commission_bps" integer NOT NULL,
+	"buffer_before_min" smallint DEFAULT 0 NOT NULL,
+	"buffer_after_min" smallint DEFAULT 0 NOT NULL,
 	"starts_at" timestamp with time zone NOT NULL,
 	"ends_at" timestamp with time zone NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "appointment_items_tenant_id_id_key" UNIQUE("tenant_id","id"),
-	CONSTRAINT "appointment_items_tenant_appointment_id_key" UNIQUE("tenant_id","appointment_id","id"),
+	CONSTRAINT "appointment_items_tenant_appointment_id_staff_key" UNIQUE("tenant_id","appointment_id","id","staff_id"),
 	CONSTRAINT "appointment_items_tenant_appointment_position_key" UNIQUE("tenant_id","appointment_id","position"),
 	CONSTRAINT "appointment_items_position_range" CHECK ("app"."appointment_items"."position" BETWEEN 1 AND 50),
 	CONSTRAINT "appointment_items_service_name_length" CHECK (char_length("app"."appointment_items"."service_name") BETWEEN 1 AND 120),
 	CONSTRAINT "appointment_items_duration_range" CHECK ("app"."appointment_items"."duration_min" BETWEEN 5 AND 720),
+	CONSTRAINT "appointment_items_phases_valid" CHECK (app_private.service_phases_are_valid("app"."appointment_items"."phases", "app"."appointment_items"."duration_min")),
+	CONSTRAINT "appointment_items_duration_coherent" CHECK ("app"."appointment_items"."ends_at" - "app"."appointment_items"."starts_at" = make_interval(mins => "app"."appointment_items"."duration_min")),
 	CONSTRAINT "appointment_items_price_range" CHECK ("app"."appointment_items"."price_cents" BETWEEN 0 AND 100000000),
 	CONSTRAINT "appointment_items_commission_range" CHECK ("app"."appointment_items"."commission_bps" BETWEEN 0 AND 10000),
-	CONSTRAINT "appointment_items_time_order" CHECK ("app"."appointment_items"."ends_at" > "app"."appointment_items"."starts_at")
+	CONSTRAINT "appointment_items_time_order" CHECK ("app"."appointment_items"."ends_at" > "app"."appointment_items"."starts_at"),
+	CONSTRAINT "appointment_items_instant_precision" CHECK (date_trunc('milliseconds', "app"."appointment_items"."starts_at") = "app"."appointment_items"."starts_at" AND date_trunc('milliseconds', "app"."appointment_items"."ends_at") = "app"."appointment_items"."ends_at"),
+	CONSTRAINT "appointment_items_buffer_before_range" CHECK ("app"."appointment_items"."buffer_before_min" BETWEEN 0 AND 240),
+	CONSTRAINT "appointment_items_buffer_after_range" CHECK ("app"."appointment_items"."buffer_after_min" BETWEEN 0 AND 240)
 );
 --> statement-breakpoint
 CREATE TABLE "app"."appointments" (
@@ -54,6 +62,7 @@ CREATE TABLE "app"."appointments" (
 	"starts_at" timestamp with time zone NOT NULL,
 	"ends_at" timestamp with time zone NOT NULL,
 	"local_starts_at" timestamp NOT NULL,
+	"local_utc_offset_seconds" integer NOT NULL,
 	"timezone" text NOT NULL,
 	"hold_expires_at" timestamp with time zone,
 	"confirmed_at" timestamp with time zone,
@@ -75,7 +84,10 @@ CREATE TABLE "app"."appointments" (
 	CONSTRAINT "appointments_source_valid" CHECK ("app"."appointments"."source" IN ('online', 'staff', 'walk_in')),
 	CONSTRAINT "appointments_time_order" CHECK ("app"."appointments"."ends_at" > "app"."appointments"."starts_at"),
 	CONSTRAINT "appointments_max_length" CHECK ("app"."appointments"."ends_at" - "app"."appointments"."starts_at" <= interval '24 hours'),
+	CONSTRAINT "appointments_instant_precision" CHECK (date_trunc('milliseconds', "app"."appointments"."starts_at") = "app"."appointments"."starts_at" AND date_trunc('milliseconds', "app"."appointments"."ends_at") = "app"."appointments"."ends_at"),
 	CONSTRAINT "appointments_timezone_valid" CHECK (app_private.is_valid_iana_timezone("app"."appointments"."timezone")),
+	CONSTRAINT "appointments_utc_offset_range" CHECK ("app"."appointments"."local_utc_offset_seconds" BETWEEN -64800 AND 64800),
+	CONSTRAINT "appointments_local_time_coherent" CHECK ("app"."appointments"."local_starts_at" = date_trunc('second', ("app"."appointments"."starts_at" AT TIME ZONE 'UTC') + make_interval(secs => "app"."appointments"."local_utc_offset_seconds"))),
 	CONSTRAINT "appointments_pending_requires_hold" CHECK ("app"."appointments"."status" <> 'pending' OR "app"."appointments"."hold_expires_at" IS NOT NULL),
 	CONSTRAINT "appointments_idempotency_key_format" CHECK ("app"."appointments"."idempotency_key" ~ '^[A-Za-z0-9._:-]{8,128}$'),
 	CONSTRAINT "appointments_cancellation_reason_length" CHECK (char_length("app"."appointments"."cancellation_reason") BETWEEN 1 AND 500),
@@ -98,7 +110,8 @@ CREATE TABLE "app"."occupancies" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "occupancies_kind_valid" CHECK ("app"."occupancies"."kind" IN ('service', 'buffer')),
 	CONSTRAINT "occupancies_time_order" CHECK ("app"."occupancies"."ends_at" > "app"."occupancies"."starts_at"),
-	CONSTRAINT "occupancies_max_length" CHECK ("app"."occupancies"."ends_at" - "app"."occupancies"."starts_at" <= interval '24 hours')
+	CONSTRAINT "occupancies_max_length" CHECK ("app"."occupancies"."ends_at" - "app"."occupancies"."starts_at" <= interval '24 hours'),
+	CONSTRAINT "occupancies_instant_precision" CHECK (date_trunc('milliseconds', "app"."occupancies"."starts_at") = "app"."occupancies"."starts_at" AND date_trunc('milliseconds', "app"."occupancies"."ends_at") = "app"."occupancies"."ends_at")
 );
 --> statement-breakpoint
 CREATE TABLE "app"."time_off" (
@@ -114,6 +127,7 @@ CREATE TABLE "app"."time_off" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "time_off_kind_valid" CHECK ("app"."time_off"."kind" IN ('time_off', 'vacation', 'training', 'blocked')),
 	CONSTRAINT "time_off_order" CHECK ("app"."time_off"."ends_at" > "app"."time_off"."starts_at"),
+	CONSTRAINT "time_off_instant_precision" CHECK (date_trunc('milliseconds', "app"."time_off"."starts_at") = "app"."time_off"."starts_at" AND date_trunc('milliseconds', "app"."time_off"."ends_at") = "app"."time_off"."ends_at"),
 	CONSTRAINT "time_off_max_length" CHECK ("app"."time_off"."ends_at" - "app"."time_off"."starts_at" <= interval '400 days'),
 	CONSTRAINT "time_off_note_length" CHECK (char_length("app"."time_off"."note") BETWEEN 1 AND 200)
 );
@@ -132,6 +146,7 @@ CREATE TABLE "app"."working_hours" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "working_hours_weekday_range" CHECK ("app"."working_hours"."weekday" BETWEEN 1 AND 7),
 	CONSTRAINT "working_hours_time_order" CHECK ("app"."working_hours"."end_time" > "app"."working_hours"."start_time"),
+	CONSTRAINT "working_hours_whole_minutes" CHECK (extract(second FROM "app"."working_hours"."start_time") = 0 AND extract(second FROM "app"."working_hours"."end_time") = 0),
 	CONSTRAINT "working_hours_validity_order" CHECK ("app"."working_hours"."valid_until" IS NULL OR "app"."working_hours"."valid_until" >= "app"."working_hours"."valid_from")
 );
 --> statement-breakpoint
@@ -258,7 +273,7 @@ ALTER TABLE "app"."appointment_items" ADD CONSTRAINT "appointment_items_staff_fk
 ALTER TABLE "app"."appointments" ADD CONSTRAINT "appointments_location_fk" FOREIGN KEY ("tenant_id","location_id") REFERENCES "app"."locations"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app"."appointments" ADD CONSTRAINT "appointments_customer_fk" FOREIGN KEY ("tenant_id","customer_id") REFERENCES "app"."customers"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app"."appointments" ADD CONSTRAINT "appointments_rescheduled_from_fk" FOREIGN KEY ("tenant_id","rescheduled_from_id") REFERENCES "app"."appointments"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "app"."occupancies" ADD CONSTRAINT "occupancies_appointment_item_fk" FOREIGN KEY ("tenant_id","appointment_id","appointment_item_id") REFERENCES "app"."appointment_items"("tenant_id","appointment_id","id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "app"."occupancies" ADD CONSTRAINT "occupancies_appointment_item_fk" FOREIGN KEY ("tenant_id","appointment_id","appointment_item_id","staff_id") REFERENCES "app"."appointment_items"("tenant_id","appointment_id","id","staff_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app"."occupancies" ADD CONSTRAINT "occupancies_staff_fk" FOREIGN KEY ("tenant_id","staff_id") REFERENCES "app"."staff"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app"."time_off" ADD CONSTRAINT "time_off_staff_fk" FOREIGN KEY ("tenant_id","staff_id") REFERENCES "app"."staff"("tenant_id","id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "app"."working_hours" ADD CONSTRAINT "working_hours_staff_fk" FOREIGN KEY ("tenant_id","staff_id") REFERENCES "app"."staff"("tenant_id","id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

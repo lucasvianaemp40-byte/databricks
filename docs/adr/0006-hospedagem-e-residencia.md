@@ -79,7 +79,13 @@
   - validar preços e contratos (DPA e cláusulas-padrão);
   - registrar os subprocessadores na lista pública;
   - teste pós-deploy dos invariantes com o papel real (`assert_security_invariants`);
-  - restauração de backup testada a cada trimestre.
+  - restauração de backup testada a cada trimestre;
+  - bloquear `TRACE`, `TRACK` e `CONNECT` com 405 na borda (Vercel Firewall ou CDN): o Next
+    16.4 responde a eles sem cabeçalhos de segurança. Conferir antes se a Vercel já os recusa
+    (não verificado);
+  - configurar `APP_URL` e `APP_ENV` por ambiente em runtime: o mesmo build serve preview e
+    produção sem rebuild ([README do web](../../apps/web/README.md#variáveis-de-ambiente));
+  - Sentry (região, túnel e redaction) conforme o [ADR-0010](0010-observabilidade.md).
 
 ## Alternativas consideradas
 

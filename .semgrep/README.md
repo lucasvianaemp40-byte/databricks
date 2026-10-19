@@ -7,12 +7,18 @@ severidade `ERROR`, então qualquer achado novo bloqueia o PR.
 
 | Regra | O que pega | Onde vale |
 |---|---|---|
-| `sql-raw-interpolation` | `sql.raw()` com valor não literal; template ou concatenação passados a `query`/`execute` | todo o código, exceto o DDL de `packages/db/src/schema/` |
-| `pii-in-logs` | nome, telefone, e-mail, CPF, observações, tokens ou o registro inteiro de cliente/usuário em `console`/`logger` | todo o código |
+| `sql-raw-interpolation` | `sql.raw()` com valor não literal (inclusive com alias ou namespace do `drizzle-orm`); template ou concatenação escritos direto como texto de `query`/`execute` (1º argumento ou `{ text }`) | todo o código, exceto o DDL de `packages/db/src/schema/` |
+| `sql-string-taint` | o mesmo SQL montado antes numa variável (`` const q = `...${x}`; client.query(q) ``, `+=`, `{ text: q }`), em modo taint; `escapeIdentifier`/`escapeLiteral` limpam o valor | todo o código, exceto o DDL de `packages/db/src/schema/` |
+| `pii-in-logs` | nome, telefone, e-mail, CPF, observações, tokens ou o registro inteiro de cliente/usuário em `console`/`logger`, Sentry ou analytics, em qualquer subexpressão (concatenação, `JSON.stringify`, `{ data: customer }`, colchete, snake_case) | todo o código |
 | `domain-clock` | `Date.now()`, `new Date()`, `Temporal.Now`, `Math.random()`, `crypto.randomUUID()` no domínio | `packages/scheduling-core/src/` (exceto `time/clock.ts`) |
-| `server-timezone-date` | getters locais de `Date`, `toLocale*String`/`Intl.DateTimeFormat` sem `timeZone`, `new Date(ano, mês, ...)` | `apps/` e `packages/`, fora de testes |
-| `server-action-auth` | Server Action exportada sem guarda `await requireXxx()` na primeira instrução, ou definida com o cliente base `actionClient` | arquivos `'use server'` e actions inline |
-| `drizzle-tenant-scope` | `select/insert/update/delete/query` em tabela de tenant fora de `withTenant(...)` ou de função com `tx: TenantTransaction` | `apps/` e `packages/`, exceto `packages/db` |
+| `server-timezone-date` | getters locais de `Date`, `toLocale*String`/`Intl.DateTimeFormat` sem `timeZone`, `new Date(ano, mês, ...)`, `new Date`/`Date.parse` com data-hora em texto sem `Z`/offset | `apps/` e `packages/`, fora de testes |
+| `server-action-auth` | Server Action sem guarda `await requireXxx()` na primeira instrução (exportada de arquivo `'use server'` ou inline: declaração, arrow ou function expression), ou definida com o cliente base `actionClient` | arquivos `'use server'` e actions inline |
+| `drizzle-tenant-scope` | `select/insert/update/delete/query` em tabela de tenant cujo receptor não é o `tx` do callback de `withTenant(...)` nem o parâmetro `TenantTransaction` da função (o `db` externo dentro de `withTenant` também é acusado) | `apps/` e `packages/`, exceto `packages/db` |
+| `drizzle-tenant-alias` | tabela de tenant importada de `@salon/db` com alias, o que esconderia a query da regra acima | `apps/` e `packages/`, exceto `packages/db` |
+
+As regras de tabela de tenant (`drizzle-tenant-*`) reconhecem a tabela pelo nome: são uma
+heurística (não pegam `const t = customers` nem reexportação por módulo local). A RLS com
+`FORCE` continua sendo a camada que faz esses erros falharem fechado.
 
 ## Testes das regras
 

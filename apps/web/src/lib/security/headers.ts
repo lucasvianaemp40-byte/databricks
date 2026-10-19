@@ -21,8 +21,13 @@ export const HSTS_VALUE = 'max-age=63072000; includeSubDomains';
  * - otp-credentials: WebOTP, para preencher o código recebido por SMS;
  * - identity-credentials-get, clipboard-write, fullscreen, web-share.
  * Recursos do Privacy Sandbox (browsing-topics, attribution-reporting etc.) foram aposentados
- * pelo Chrome; o navegador acusa erro no console para nomes que não reconhece, e a CSP já
- * impede scripts de terceiros que os usariam.
+ * pelo Chrome, e a CSP já impede scripts de terceiros que os usariam. Nome que o navegador não
+ * reconhece gera AVISO no console ("Unrecognized feature"; só cabeçalho malformado vira erro),
+ * e a fixture dos E2E reprova esse aviso (e2e/support/console.ts).
+ *
+ * 'bluetooth' fica mesmo sendo desconhecido para o Chromium do Linux (Web Bluetooth desligado
+ * por padrão ali): no Chrome do Android, Windows e macOS o nome é reconhecido e a negação
+ * vale. É o único aviso tolerado pelos E2E (PLATFORM_GATED_PERMISSIONS).
  */
 export const DENIED_PERMISSIONS = [
   'accelerometer',

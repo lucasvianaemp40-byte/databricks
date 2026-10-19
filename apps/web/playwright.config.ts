@@ -73,12 +73,33 @@ const launchOptions = executablePath === undefined ? {} : { executablePath };
 // Vídeo depende do ffmpeg da mesma versão do Playwright; com navegador alternativo ele
 // costuma faltar também, então o vídeo fica desligado e sobram trace e screenshot.
 const usesBundledBrowsers = executablePath === undefined;
+// Sem E2E_BASE_URL a config sobe o build local (webServer abaixo).
+const hasLocalBuild = E2E_BASE_URL === undefined;
+
+// Teste que não se aplica a um projeto sai pela config, nunca por um pulo condicional no
+// corpo do teste (lint noSkippedTests, plugin no-disabled-tests e src/test-hygiene.test.ts).
+// `pnpm --filter @salon/web exec playwright test --list` mostra o que roda em cada projeto. O
+// src/test-hygiene.test.ts fixa isso (tabela SPEC_PROJECTS_* e filtros previstos por projeto):
+// spec novo ou filtro novo (testIgnore, grep, grepInvert, shard, nos projetos ou na raiz)
+// reprova o unit até a tabela e os filtros mudarem no mesmo PR.
+
+/** Cabeçalhos HTTP, a fixture de console e o boot com outra config não dependem do dispositivo. */
+const DEVICE_INDEPENDENT_SPECS = /(?:security-headers|console-guard|runtime-env)\.spec\.ts$/;
+/** Sobe outro `next start` sobre o .next do webServer: sem build local não há o que testar. */
+const LOCAL_BUILD_SPECS = /runtime-env\.spec\.ts$/;
+/**
+ * Tag dos testes que só fazem sentido no desktop (ex.: navegação por Tab com teclado físico):
+ * `test('…', { tag: '@desktop-only' }, …)`. O Playwright casa o grepInvert com
+ * "arquivo describe título @tags".
+ */
+const DESKTOP_ONLY_TAG = /(?:^|\s)@desktop-only(?=\s|$)/;
 
 export default defineConfig({
   testDir: './e2e',
   testMatch: '**/*.spec.ts',
   fullyParallel: true,
-  forbidOnly: isCI,
+  // .only quebra a suíte também fora do CI (src/test-hygiene.test.ts fixa isto).
+  forbidOnly: true,
   retries: isCI ? 2 : 0,
   ...(isCI ? { workers: '50%' } : {}),
   timeout: 30_000,
@@ -98,16 +119,18 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'], launchOptions },
+      ...(hasLocalBuild ? {} : { testIgnore: LOCAL_BUILD_SPECS }),
     },
     {
       // Público majoritariamente Android: celular intermediário popular no Brasil.
       name: 'mobile',
       use: { ...devices['Galaxy A55'], launchOptions },
-      // Cabeçalhos HTTP não dependem do dispositivo: rodam uma vez, no projeto desktop.
-      testIgnore: /security-headers\.spec\.ts$/,
+      // Os specs independentes do dispositivo rodam uma vez, no projeto desktop.
+      testIgnore: DEVICE_INDEPENDENT_SPECS,
+      grepInvert: DESKTOP_ONLY_TAG,
     },
   ],
-  ...(E2E_BASE_URL === undefined
+  ...(hasLocalBuild
     ? {
         webServer: {
           command: `${E2E_SKIP_BUILD ? '' : 'pnpm run build && '}pnpm run start --port ${port} --hostname 127.0.0.1`,
@@ -119,7 +142,7 @@ export default defineConfig({
           gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
           env: {
             APP_ENV: 'e2e',
-            NEXT_PUBLIC_APP_URL: localOrigin,
+            APP_URL: localOrigin,
             NEXT_TELEMETRY_DISABLED: '1',
           },
         },

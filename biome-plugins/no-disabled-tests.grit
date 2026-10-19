@@ -1,0 +1,92 @@
+// Teste desligado é teste apagado (regra 3 do CLAUDE.md). O biome.json liga as regras nativas
+// noSkippedTests e noFocusedTests como erro; este plugin cobre o que elas não veem:
+// todo, skipIf, runIf, fails/fail, modificadores encadeados (it.skip.prop, it.each(...).skip),
+// pulo em tempo de execução (ctx.skip, t.skip, testInfo.skip/fixme/fail), colchetes e opções
+// { skip, todo, fails, only }. Vale só para arquivos de teste (includes no biome.json).
+// A prova está em no-disabled-tests.test.mjs, nesta pasta.
+language js
+
+or {
+  `$runner.$modifier` where {
+    $runner <: r"^(?:it|test|describe|suite)\b[\s\S]*",
+    $modifier <: or {
+      `todo`,
+      `skipIf`,
+      `runIf`,
+      `fails`,
+      `fail`
+    },
+    register_diagnostic(span=$modifier, message="Teste pendente, condicional ou com falha esperada (todo, skipIf, runIf, fails, fail) passa sem verificar nada. Corrija o teste ou o código; teste instável vai para a quarentena por tag (docs/qa/estrategia.md, seção 12).")
+  },
+  `$runner.$modifier.$next` where {
+    $runner <: r"^(?:it|test|describe|suite)\b[\s\S]*",
+    $modifier <: or {
+      `skip`,
+      `only`,
+      `fixme`
+    },
+    register_diagnostic(span=$modifier, message="Teste pulado ou focado por modificador encadeado (it.skip.prop, test.skip.each). Remova o modificador: a regra 3 do CLAUDE.md proíbe desligar teste.")
+  },
+  `$runner.$modifier` where {
+    $runner <: r"^(?:it|test|describe|suite)\b[\s\S]*\)[\s\S]*",
+    $modifier <: or {
+      `skip`,
+      `only`,
+      `fixme`
+    },
+    register_diagnostic(span=$modifier, message="Teste pulado ou focado depois de each/info (it.each(...).skip, test.info().skip()). Remova o modificador: a regra 3 do CLAUDE.md proíbe desligar teste.")
+  },
+  `$context.$modifier($...)` where {
+    $context <: not r"^(?:it|test|describe|suite)\b[\s\S]*",
+    or {
+      $modifier <: or {
+        `skip`,
+        `todo`,
+        `fixme`
+      },
+      and { $modifier <: `fail`, $context <: r"^(?:testInfo|info)$" }
+    },
+    register_diagnostic(span=$modifier, message="Pulo ou pendência em tempo de execução (ctx.skip, t.skip, t.todo, testInfo.skip/fixme/fail) desliga o teste em silêncio. Para teste que não se aplica a um projeto do Playwright, use tag e grepInvert na config.")
+  },
+  `skip($...)` as $call where {
+    register_diagnostic(span=$call, message="skip() do contexto do teste desliga o teste em silêncio. Remova: a regra 3 do CLAUDE.md proíbe desligar teste.")
+  },
+  `$runner[$key]` where {
+    $runner <: r"^(?:it|test|describe|suite)\b[\s\S]*",
+    $key <: r"^['\"`](?:only|skip|skipIf|runIf|todo|fails|fail|fixme)['\"`]$",
+    register_diagnostic(span=$key, message="Modificador de teste entre colchetes contorna o lint. Remova: a regra 3 do CLAUDE.md proíbe desligar teste.")
+  },
+  `$runner($options, $...)` where {
+    $runner <: r"^(?:it|test|describe|suite)(?:\.[A-Za-z]+)*$",
+    $options <: object(),
+    $options <: contains or {
+      `skip: $_`,
+      `todo: $_`,
+      `fails: $_`,
+      `only: $_`
+    },
+    register_diagnostic(span=$options, message="Opção skip, todo, fails ou only desliga ou foca testes. Remova a opção: a regra 3 do CLAUDE.md proíbe desligar teste.")
+  },
+  `$runner($name, $options, $...)` where {
+    $runner <: r"^(?:it|test|describe|suite)(?:\.[A-Za-z]+)*$",
+    $options <: object(),
+    $options <: contains or {
+      `skip: $_`,
+      `todo: $_`,
+      `fails: $_`,
+      `only: $_`
+    },
+    register_diagnostic(span=$options, message="Opção skip, todo, fails ou only desliga ou foca testes. Remova a opção: a regra 3 do CLAUDE.md proíbe desligar teste.")
+  },
+  `$runner($name, $body, $options)` where {
+    $runner <: r"^(?:it|test|describe|suite)(?:\.[A-Za-z]+)*$",
+    $options <: object(),
+    $options <: contains or {
+      `skip: $_`,
+      `todo: $_`,
+      `fails: $_`,
+      `only: $_`
+    },
+    register_diagnostic(span=$options, message="Opção skip, todo, fails ou only desliga ou foca testes. Remova a opção: a regra 3 do CLAUDE.md proíbe desligar teste.")
+  }
+}

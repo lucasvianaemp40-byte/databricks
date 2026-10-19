@@ -1,5 +1,7 @@
-# CodeQL "advanced setup" (JS/TS + GitHub Actions). Em repositório privado exige GitHub Code
-# Security; por isso só roda com a variável de repositório GHAS_ENABLED = 'true'.
+# CodeQL "advanced setup" (JS/TS + GitHub Actions). Ligado por padrão (repositório público, ou
+# privado com GitHub Code Security); só um repositório privado SEM Code Security define a
+# variável GHAS_ENABLED = 'false' para desligá-lo. Ligado por padrão de propósito: esquecer a
+# variável não pode desligar o SAST em silêncio.
 # Alternativa sem YAML: "Default setup" em Settings > Code security (não usar os dois juntos).
 name: CodeQL
 
@@ -21,7 +23,7 @@ concurrency:
 jobs:
   analyze:
     name: CodeQL (${{ matrix.language }})
-    if: ${{ vars.GHAS_ENABLED == 'true' }}
+    if: ${{ vars.GHAS_ENABLED != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:

@@ -39,15 +39,22 @@ rules:
           # Tabelas do schema `app` (packages/db/src/schema). metavariable-regex é ancorado no
           # início: o prefixo opcional cobre `schema.customers`.
           regex: ^(\w+\.)?(tenants|locations|staff|services|staffServices|workingHours|timeOff|customers|appointments|appointmentItems|occupancies|appointmentEvents)$
-      - pattern-not-inside: withTenant($DB2, $TENANT, ...)
+      # O RECEPTOR da query ($DB) precisa ser o parâmetro do callback de withTenant ou da função
+      # que recebe TenantTransaction. Estar "dentro" de withTenant não basta: o `db` externo
+      # usado ali roda fora da transação, sem app.tenant_id. As variantes `=> { ... }` cobrem
+      # callback com várias instruções; sem elas o uso correto vira falso positivo.
+      - pattern-not-inside: withTenant($DB2, $TENANT, async ($DB) => { ... }, ...)
+      - pattern-not-inside: withTenant($DB2, $TENANT, ($DB) => { ... }, ...)
+      - pattern-not-inside: withTenant($DB2, $TENANT, async ($DB) => $BODY, ...)
+      - pattern-not-inside: withTenant($DB2, $TENANT, ($DB) => $BODY, ...)
       - pattern-not-inside: |
-          function $FN(..., $TX: TenantTransaction, ...) { ... }
+          function $FN(..., $DB: TenantTransaction, ...) { ... }
       - pattern-not-inside: |
-          async function $FN(..., $TX: TenantTransaction, ...) { ... }
+          async function $FN(..., $DB: TenantTransaction, ...) { ... }
       - pattern-not-inside: |
-          (..., $TX: TenantTransaction, ...) => $BODY
+          (..., $DB: TenantTransaction, ...) => $BODY
       - pattern-not-inside: |
-          async (..., $TX: TenantTransaction, ...) => $BODY
+          async (..., $DB: TenantTransaction, ...) => $BODY
     metadata:
       category: security
       subcategory: [audit]

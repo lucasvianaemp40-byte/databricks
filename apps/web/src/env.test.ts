@@ -3,7 +3,7 @@ import { createAppEnv, InvalidEnvironmentError, type RuntimeEnv } from './env';
 
 const EMPTY: RuntimeEnv = {
   APP_ENV: undefined,
-  NEXT_PUBLIC_APP_URL: undefined,
+  APP_URL: undefined,
   NODE_ENV: undefined,
 };
 
@@ -25,13 +25,13 @@ describe('createAppEnv (servidor)', () => {
     const env = serverEnv({});
     expect(env.APP_ENV).toBe('development');
     expect(env.NODE_ENV).toBe('development');
-    expect(env.NEXT_PUBLIC_APP_URL).toBe('http://localhost:3000');
+    expect(env.APP_URL).toBe('http://localhost:3000');
   });
 
   it('trata string vazia como ausente (linha "VAR=" em .env)', () => {
-    const env = serverEnv({ APP_ENV: '', NEXT_PUBLIC_APP_URL: '' });
+    const env = serverEnv({ APP_ENV: '', APP_URL: '' });
     expect(env.APP_ENV).toBe('development');
-    expect(env.NEXT_PUBLIC_APP_URL).toBe('http://localhost:3000');
+    expect(env.APP_URL).toBe('http://localhost:3000');
   });
 
   it('não altera o objeto recebido', () => {
@@ -44,17 +44,17 @@ describe('createAppEnv (servidor)', () => {
     const env = serverEnv({
       APP_ENV: 'production',
       NODE_ENV: 'production',
-      NEXT_PUBLIC_APP_URL: 'https://agenda.exemplo.com.br',
+      APP_URL: 'https://agenda.exemplo.com.br',
     });
     expect(env.APP_ENV).toBe('production');
-    expect(env.NEXT_PUBLIC_APP_URL).toBe('https://agenda.exemplo.com.br');
+    expect(env.APP_URL).toBe('https://agenda.exemplo.com.br');
   });
 
   it('aceita build de produção servido em http local para e2e', () => {
     const env = serverEnv({
       APP_ENV: 'e2e',
       NODE_ENV: 'production',
-      NEXT_PUBLIC_APP_URL: 'http://127.0.0.1:3100',
+      APP_URL: 'http://127.0.0.1:3100',
     });
     expect(env.APP_ENV).toBe('e2e');
   });
@@ -85,8 +85,8 @@ describe('createAppEnv (servidor)', () => {
     ['com query', 'https://agenda.exemplo.com.br?x=1'],
     ['com fragmento', 'https://agenda.exemplo.com.br#topo'],
     ['com credenciais', urlWithCredentials('https://agenda.exemplo.com.br')],
-  ])('rejeita NEXT_PUBLIC_APP_URL %s', (_case, url) => {
-    expect(() => serverEnv({ NEXT_PUBLIC_APP_URL: url })).toThrow(/NEXT_PUBLIC_APP_URL/);
+  ])('rejeita APP_URL %s', (_case, url) => {
+    expect(() => serverEnv({ APP_URL: url })).toThrow(/APP_URL/);
   });
 
   it.each([
@@ -97,35 +97,37 @@ describe('createAppEnv (servidor)', () => {
     ['https em [::1]', 'https://[::1]:8443'],
   ])('em produção, exige origem pública em https (%s)', (_case, url) => {
     expect(() =>
-      serverEnv({ APP_ENV: 'production', NODE_ENV: 'production', NEXT_PUBLIC_APP_URL: url }),
-    ).toThrow(/NEXT_PUBLIC_APP_URL.*https/);
+      serverEnv({ APP_ENV: 'production', NODE_ENV: 'production', APP_URL: url }),
+    ).toThrow(/APP_URL.*https/);
   });
 
   it('lista todas as variáveis inválidas de uma vez', () => {
-    expect(() => serverEnv({ APP_ENV: 'x', NEXT_PUBLIC_APP_URL: 'y', NODE_ENV: 'z' })).toThrow(
-      /APP_ENV[\s\S]*NEXT_PUBLIC_APP_URL[\s\S]*NODE_ENV|APP_ENV[\s\S]*NODE_ENV[\s\S]*NEXT_PUBLIC_APP_URL/,
+    expect(() => serverEnv({ APP_ENV: 'x', APP_URL: 'y', NODE_ENV: 'z' })).toThrow(
+      /APP_ENV[\s\S]*APP_URL[\s\S]*NODE_ENV|APP_ENV[\s\S]*NODE_ENV[\s\S]*APP_URL/,
     );
   });
 });
 
 describe('createAppEnv (cliente)', () => {
   const clientEnv = createAppEnv(
-    { ...EMPTY, NEXT_PUBLIC_APP_URL: 'https://agenda.exemplo.com.br', NODE_ENV: 'production' },
+    { ...EMPTY, APP_URL: 'https://agenda.exemplo.com.br', NODE_ENV: 'production' },
     { isServer: false },
   );
 
-  it('expõe variáveis NEXT_PUBLIC_ e compartilhadas', () => {
-    expect(clientEnv.NEXT_PUBLIC_APP_URL).toBe('https://agenda.exemplo.com.br');
+  it('expõe as variáveis compartilhadas', () => {
     expect(clientEnv.NODE_ENV).toBe('production');
   });
 
-  it('lança erro ao ler variável de servidor no navegador', () => {
-    expect(() => clientEnv.APP_ENV).toThrow(/server-side/);
-  });
+  it.each(['APP_ENV', 'APP_URL'] as const)(
+    'lança erro ao ler a variável de servidor %s no navegador',
+    (name) => {
+      expect(() => clientEnv[name]).toThrow(/server-side/);
+    },
+  );
 
   it('não valida variáveis de servidor no navegador (elas não existem lá)', () => {
     expect(() =>
-      createAppEnv({ ...EMPTY, APP_ENV: 'invalido' }, { isServer: false }),
+      createAppEnv({ ...EMPTY, APP_ENV: 'invalido', APP_URL: 'invalida' }, { isServer: false }),
     ).not.toThrow();
   });
 });

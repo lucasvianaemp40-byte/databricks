@@ -40,8 +40,10 @@ jobs:
       NEXT_TELEMETRY_DISABLED: "1"
       TURBO_TELEMETRY_DISABLED: "1"
       # Build de produção (NODE_ENV=production) como num preview: sem indexação, origem local.
+      # As duas são lidas pelo servidor em runtime (`next start`), não embutidas no build: ver
+      # "Variáveis de ambiente" em apps/web/README.md.
       APP_ENV: preview
-      NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
+      APP_URL: http://127.0.0.1:3000
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

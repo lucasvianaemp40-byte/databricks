@@ -50,6 +50,10 @@
           {
             "context": "security-ok",
             "integration_id": 15368
+          },
+          {
+            "context": "pr-title",
+            "integration_id": 15368
           }
         ]
       }

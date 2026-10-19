@@ -24,7 +24,7 @@ Iteração 1. Decisão em [ADR-0004](../adr/0004-autenticacao-better-auth.md).
 | E1.6 | Como **membro**, quero recuperar a senha sem perder a proteção do segundo fator | P0 | o reset não cria sessão; o login seguinte exige o segundo fator; as outras sessões são revogadas |
 | E1.7 | Como **membro**, quero ver e encerrar minhas sessões ativas | P1 | lista com dispositivo e data; encerrar uma ou todas as outras |
 | E1.8 | Como **membro que perdeu o TOTP**, quero recuperar o acesso com segurança | P1 | backup code de uso único; sem backup code, processo assistido com espera e notificação a todos os owners |
-| E1.9 | (técnica) Camada de autorização | P0 | `tenantAction`/`ownerAction` (sessão → membership → papel → MFA → `withTenant`); `server-only`; **matriz de autorização com meta-teste** "toda rota e action tem entrada"; 404 para recurso de outro tenant; inatividade e tempo absoluto por papel |
+| E1.9 | (técnica) Camada de autorização | P0 | `tenantAction`/`ownerAction` (sessão → membership → papel → MFA → `withTenant`); `server-only`; **matriz de autorização com meta-teste** "toda rota e action tem entrada"; 404 para recurso de outro tenant; inatividade e tempo absoluto por papel; `IdentifierConflictError` vira 404/409 genérico (nunca "já existe") e `TransactionClosedError` vira 500 (bug); `id` e `tenant_id` nunca aceitos do cliente em INSERT/upsert; `tx` usado só dentro do callback de `withTenant` |
 | E1.10 | (técnica) Infraestrutura de autenticação | P0 | schema `auth` + papel `app_auth`; `app_user` só com SELECT em membros e organizações; E2E que confere todos os `Set-Cookie` (`__Host-`, `Secure`, `HttpOnly`, `SameSite=Lax`, sem `Domain`); `cookieCache` desligado |
 
 ## E2. Cadastro do salão
@@ -33,7 +33,7 @@ Iteração 2.
 
 | ID | História | P | Critérios específicos |
 |---|---|---|---|
-| E2.1 | Como **dono**, quero cadastrar uma unidade com endereço e fuso, para que a agenda mostre a hora certa | P0 | seletor com as 16 zonas IANA do Brasil, padrão `America/Sao_Paulo`; nunca offset fixo; grade, antecedência mínima e horizonte com os padrões do banco |
+| E2.1 | Como **dono**, quero cadastrar uma unidade com endereço e fuso, para que a agenda mostre a hora certa | P0 | seletor com uma lista fixa das 16 zonas IANA atuais do Brasil, padrão `America/Sao_Paulo`, nunca `Intl.supportedValuesOf('timeZone')` (o ICU do Node lista links legados, como `America/Buenos_Aires`, que um PostgreSQL sem `tzdata-legacy` recusa); nunca offset fixo; o banco e o core só aceitam nome `Area/Local` sem dígito (recusam `UTC`, use `Etc/UTC`, e `Etc/GMT+3`); grade, antecedência mínima e horizonte com os padrões do banco |
 | E2.2 | Como **dono**, quero cadastrar serviços a partir de modelos do meu segmento, para começar rápido | P0 | modelos para barbearia, salão e unhas; duração, fases (trabalho e pausa), buffers, preço em centavos e comissão; validação igual à do banco |
 | E2.3 | Como **dono**, quero cadastrar profissionais com vínculo e comissão padrão | P0 | vínculo `owner`, `employee`, `partner` ou `freelancer`; comissão e vínculo visíveis só para dono e gerência |
 | E2.4 | Como **dono**, quero definir a jornada semanal de cada profissional, com almoço | P0 | dois turnos no mesmo dia; vigência; o banco recusa sobreposição com erro claro; prévia dos horários gerados pelo motor |
@@ -50,7 +50,7 @@ Iteração 3.
 |---|---|---|---|
 | E3.1 | Como **recepção**, quero ver a agenda do dia e da semana por profissional no celular | P0 | horários no fuso da unidade; pausas visíveis; mobile-first; teclado e leitor de tela |
 | E3.2 | Como **recepção**, quero criar um agendamento para um cliente novo ou existente | P0 | origem `staff` ou `walk_in`; o motor sugere horários; a equipe pode ignorar a antecedência mínima; `23P01` vira 409 com mensagem clara e alternativas |
-| E3.3 | Como **recepção**, quero mover um agendamento arrastando | P0 | lock otimista (`version`): conflito mostra "alguém alterou, recarregue" e nada é salvo; colisão é recusada pelo banco |
+| E3.3 | Como **recepção**, quero mover um agendamento arrastando | P0 | mover é remarcação: horário, profissional, unidade e fuso da visita e do item são imutáveis no banco, então a action cancela o original e cria outro (`rescheduled_from_id`) na mesma transação; lock otimista (`version`) no original: conflito mostra "alguém alterou, recarregue" e nada é salvo; colisão é recusada pelo banco (409) |
 | E3.4 | Como **recepção**, quero marcar chegada, atendimento, conclusão, cancelamento e não comparecimento | P0 | só as transições da máquina de estados; ator registrado em `appointment_events`; cancelar libera o horário na hora |
 | E3.5 | Como **recepção**, quero encaixar um cliente na pausa de uma coloração | P1 | o motor oferece a pausa; o `EXCLUDE` garante |
 | E3.6 | Como **dono**, quero ver o histórico de alterações de um agendamento | P1 | lista de `appointment_events` com ator e horário local |
@@ -62,8 +62,8 @@ Iteração 4.
 
 | ID | História | P | Critérios específicos |
 |---|---|---|---|
-| E4.1 | Como **cliente**, quero abrir o link do salão e ver serviços e profissionais disponíveis | P0 | `slug → tenant` por função dedicada que devolve só o necessário; só serviços e profissionais agendáveis online; nenhum dado de outros clientes |
-| E4.2 | Como **cliente**, quero escolher dia e horário | P0 | horários do motor no fuso da **unidade** (não do aparelho), com o fuso exibido quando diferir; offset visível em rótulo repetido; cache curto por unidade e data |
+| E4.1 | Como **cliente**, quero abrir o link do salão e ver serviços e profissionais disponíveis | P0 | `slug → tenant` por função dedicada que devolve só o necessário; só serviços e profissionais agendáveis online; nenhum dado de outros clientes; slugs que colidem com rotas do app e do Next (`_next`, `api`, `icon*`, `favicon*`, `robots`, `sitemap`) reservados na validação |
+| E4.2 | Como **cliente**, quero escolher dia e horário | P0 | horários do motor no fuso da **unidade** (não do aparelho), com o fuso exibido quando diferir; offset visível em rótulo repetido; cache curto por unidade e data; o servidor limita `from`/`to` a `[hoje no fuso da unidade, hoje + max_advance_days]` e a no máximo 31 dias (Zod estrito, nunca o intervalo do cliente direto); jornada só da unidade consultada e ocupações do profissional em todas as unidades; `SchedulingInputError` vira 400/422 sem stack; rate limit por IP e slug |
 | E4.3 | Como **cliente**, quero confirmar com nome e celular, sem criar senha | P0 | coleta mínima; aceite do aviso de privacidade (versão registrada); opt-in de WhatsApp separado do marketing; `Idempotency-Key`; corrida perdida vira 409 + 3 alternativas |
 | E4.4 | Como **dono**, quero exigir verificação por código no WhatsApp para novos clientes | P1 | template de autenticação; Turnstile antes do envio; limites por número, IP, tenant e dia; falha fechada sem Redis; resposta neutra |
 | E4.5 | Como **cliente**, quero remarcar ou cancelar pelo link recebido | P0 | token aleatório de 32 bytes com hash e expiração, trocado por cookie; `no-referrer`; janela de cancelamento calculada no servidor; link alheio ou expirado responde 404 |
@@ -136,10 +136,12 @@ Iteração 7.
 | ID | Item | P |
 |---|---|---|
 | T1 | Deploy: Vercel `gru1`, Neon `aws-sa-east-1`, Fly `gru`; migrações por Actions com environment protegido e OIDC ([ADR-0006](../adr/0006-hospedagem-e-residencia.md)) | P0 |
-| T2 | Observabilidade: pino com redaction, Sentry sem PII, eventos de segurança e alertas | P0 |
+| T2 | Observabilidade ([ADR-0010](../adr/0010-observabilidade.md)): pino com redaction, Sentry sem PII via túnel, `report-to` da CSP, eventos de segurança e alertas. Aceite: `apps/web/src/server/logger.ts` com teste de redaction (telefone, e-mail, token, cookie, `authorization`) que falha antes; casos `ruleid`/`ok` do logger na fixture da regra Semgrep `pii-in-logs`; `beforeSend` testado; nenhuma origem nova na CSP | P0 |
 | T3 | `safeFetch` para toda chamada de saída | P0 |
 | T4 | Rate limit (Upstash `sa-east-1`) com falha fechada | P0 |
 | T5 | Matriz de autorização HTTP com dois tenants e todos os papéis no E2E | P0 |
 | T6 | Testes de RLS e invariantes contra staging com os papéis reais | P1 |
 | T7 | Mutation testing (Stryker) noturno no core (ver o bloqueio com o Vitest 5 em [QA](../qa/estrategia.md#8-mutation-testing)) | P2 |
 | T8 | Carga com k6 (disponibilidade + disputa de horário quente) | P1 |
+| T9 | Job noturno do core. Feito na fundação: propriedades com `FC_NUM_RUNS=2000` em `TZ=UTC`, `America/Sao_Paulo` e `Pacific/Kiritimati`, sem segredos ([`nightly.yml`](../../.github/workflows/nightly.yml)); só dispara depois que o arquivo estiver na branch padrão. Falta: benchmark de `computeAvailableSlots` só como relatório | P1 |
+| T10 | Gates de testes que faltam ([QA, seção 12](../qa/estrategia.md#12-testes-instáveis-flaky)): falhar a execução do Playwright com teste `skipped` ou com falha esperada (inclusive pela anotação `{ type: 'skip' \| 'fixme' \| 'fail' }`) fora de uma allowlist, e ensinar a anotação ao plugin do Biome. Feito na fundação: o reporter pelo resultado no Vitest do core, do db e do web (`test-support/`) e nas suítes `node:test` da raiz e dos hooks | P1 |

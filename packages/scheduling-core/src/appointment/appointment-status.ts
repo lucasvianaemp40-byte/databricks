@@ -1,6 +1,6 @@
 /**
  * Ciclo de vida do agendamento. Função pura: decide se uma mudança de status é válida;
- * efeitos (liberar alocações, notificar, comissão) ficam com quem chama.
+ * efeitos (liberar ocupações, notificar, comissão) ficam com quem chama.
  *
  *   (novo) -> pending -> confirmed -> checked_in -> in_service -> completed
  *   (novo) -> confirmed            (sem sinal nem aprovação)
@@ -58,7 +58,7 @@ const TRANSITIONS: { readonly [S in AppointmentStatus]: readonly AppointmentStat
     expired: allow('confirmed'),
   });
 
-/** Status cujas alocações deixam de ocupar a agenda (o horário volta a ficar livre). */
+/** Status cujas ocupações (`occupancies`) deixam de valer (o horário volta a ficar livre). */
 const RELEASING_STATUSES: ReadonlySet<AppointmentStatus> = new Set<AppointmentStatus>([
   'cancelled_by_customer',
   'cancelled_by_salon',
@@ -87,7 +87,7 @@ export function isTerminalStatus(status: AppointmentStatus): boolean {
   return isAppointmentStatus(status) && TRANSITIONS[status].length === 0;
 }
 
-/** O agendamento nesse status mantém o horário ocupado (alocações ativas)? */
+/** O agendamento nesse status mantém o horário ocupado (ocupações ativas)? */
 export function occupiesSchedule(status: AppointmentStatus): boolean {
   return isAppointmentStatus(status) && !RELEASING_STATUSES.has(status);
 }

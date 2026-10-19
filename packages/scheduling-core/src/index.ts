@@ -20,11 +20,16 @@ export {
   type AvailableSlot,
   computeAvailableSlots,
   type IsoWeekday,
+  MAX_CANDIDATE_STARTS,
+  MAX_NOTICE_MINUTES,
   MAX_RANGE_DAYS,
   type WorkShift,
 } from './availability/compute-available-slots';
 export {
   type MinuteRange,
+  OCCUPANCY_KINDS,
+  type OccupancyKind,
+  type OccupancySegment,
   type ServiceDefinition,
   type ServiceFootprint,
   type ServicePhase,
@@ -32,6 +37,7 @@ export {
   serviceFootprint,
   singlePhaseService,
   staffBusyIntervals,
+  staffOccupancySegments,
 } from './availability/service';
 export { SchedulingInputError } from './errors';
 export { type Clock, fixedClock, systemClock } from './time/clock';

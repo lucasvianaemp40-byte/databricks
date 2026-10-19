@@ -9,16 +9,21 @@ import {
 import { asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../src/client';
-import { findPostgresError, InvalidStatusTransitionError } from '../../src/errors';
+import {
+  findPostgresError,
+  InvalidStatusTransitionError,
+  TenantIsolationError,
+} from '../../src/errors';
 import { appointmentEvents, appointments, occupancies } from '../../src/schema';
 import { type TenantTransaction, withTenant } from '../../src/tenant';
-import { connectAsAppUser } from '../helpers/connections';
+import { connectAsAppUser, connectAsWorker } from '../helpers/connections';
 import {
   bookAppointment,
   createTenantFixture,
   first,
   randomIdempotencyKey,
   type TenantFixture,
+  utcOffsetSeconds,
   wallTime,
 } from '../helpers/fixtures';
 
@@ -150,14 +155,17 @@ describe('máquina de estados do agendamento (trigger appointments_guard_status)
       if ((INITIAL_APPOINTMENT_STATUSES as readonly string[]).includes(status)) {
         continue;
       }
+      const { startsAt, endsAt } = nextSlot();
       const attempt = withTenant(db, tenant.tenantId, (tx) =>
         tx.insert(appointments).values({
           locationId: tenant.locationId,
           customerId: tenant.customerId,
           status,
           source: 'staff',
-          ...nextSlot(),
-          localStartsAt: '2027-06-01 09:00:00',
+          startsAt,
+          endsAt,
+          localStartsAt: wallTime(startsAt),
+          localUtcOffsetSeconds: utcOffsetSeconds(startsAt),
           timezone: 'America/Sao_Paulo',
           idempotencyKey: randomIdempotencyKey(),
         }),
@@ -271,6 +279,149 @@ describe('máquina de estados do agendamento (trigger appointments_guard_status)
         actorId: 'recepcao',
       },
     ]);
+  });
+
+  describe('instantes de transição e hold: o valor enviado pela aplicação é ignorado', () => {
+    const forged = new Date('1999-01-01T00:00:00.000Z');
+    const instantsOf = (row: typeof appointments.$inferSelect) => ({
+      holdExpiresAt: row.holdExpiresAt,
+      confirmedAt: row.confirmedAt,
+      checkedInAt: row.checkedInAt,
+      startedAt: row.startedAt,
+      completedAt: row.completedAt,
+      cancelledAt: row.cancelledAt,
+      noShowAt: row.noShowAt,
+      expiredAt: row.expiredAt,
+      createdAt: row.createdAt,
+    });
+
+    async function readRow(appointmentId: string) {
+      return first(
+        await withTenant(db, tenant.tenantId, (tx) =>
+          tx.select().from(appointments).where(eq(appointments.id, appointmentId)),
+        ),
+      );
+    }
+
+    /** `now()` da transação, lido como o driver lê um timestamptz (milissegundos). */
+    async function transactionNow(tx: TenantTransaction): Promise<number> {
+      const { rows } = await tx.execute<{ now: string }>(sql`select now()::text as now`);
+      return new Date(first(rows).now).getTime();
+    }
+
+    it('UPDATE sem mudar o status não altera instantes, created_at nem o hold', async () => {
+      const booked = await withTenant(db, tenant.tenantId, (tx) => createIn(tx, 'confirmed'));
+      const before = await readRow(booked.appointmentId);
+      await withTenant(db, tenant.tenantId, (tx) =>
+        tx
+          .update(appointments)
+          .set({
+            holdExpiresAt: new Date('2099-01-01T00:00:00Z'),
+            confirmedAt: null,
+            checkedInAt: forged,
+            startedAt: forged,
+            completedAt: forged,
+            cancelledAt: forged,
+            noShowAt: forged,
+            expiredAt: forged,
+            createdAt: forged,
+          })
+          .where(eq(appointments.id, booked.appointmentId)),
+      );
+      expect(instantsOf(await readRow(booked.appointmentId))).toEqual(instantsOf(before));
+    });
+
+    it('transição grava o now() da transação, não o instante enviado', async () => {
+      const booked = await withTenant(db, tenant.tenantId, (tx) => createIn(tx, 'confirmed'));
+      const now = await withTenant(db, tenant.tenantId, async (tx) => {
+        await tx
+          .update(appointments)
+          .set({ status: 'cancelled_by_customer', cancelledAt: forged })
+          .where(eq(appointments.id, booked.appointmentId));
+        return transactionNow(tx);
+      });
+      expect((await readRow(booked.appointmentId)).cancelledAt?.getTime()).toBe(now);
+    });
+
+    it('INSERT ignora instantes de transições que ainda não aconteceram', async () => {
+      const { booked, now } = await withTenant(db, tenant.tenantId, async (tx) => ({
+        booked: await bookAppointment(tx, tenant, {
+          staffId: tenant.staffIds[1],
+          ...nextSlot(),
+          appointment: {
+            confirmedAt: forged,
+            checkedInAt: forged,
+            startedAt: forged,
+            completedAt: forged,
+            cancelledAt: forged,
+            noShowAt: forged,
+            expiredAt: forged,
+          },
+        }),
+        now: await transactionNow(tx),
+      }));
+      const row = await readRow(booked.appointmentId);
+      expect(instantsOf(row)).toEqual({
+        holdExpiresAt: null,
+        confirmedAt: new Date(now),
+        checkedInAt: null,
+        startedAt: null,
+        completedAt: null,
+        cancelledAt: null,
+        noShowAt: null,
+        expiredAt: null,
+        createdAt: row.createdAt,
+      });
+    });
+
+    it('o hold só muda enquanto o agendamento está pending', async () => {
+      const booked = await withTenant(db, tenant.tenantId, (tx) => createIn(tx, 'pending'));
+      const extended = new Date('2098-01-01T00:00:00Z');
+      const setHold = (holdExpiresAt: Date) =>
+        withTenant(db, tenant.tenantId, (tx) =>
+          tx
+            .update(appointments)
+            .set({ holdExpiresAt })
+            .where(eq(appointments.id, booked.appointmentId)),
+        );
+      await setHold(extended);
+      expect((await readRow(booked.appointmentId)).holdExpiresAt).toEqual(extended);
+      await withTenant(db, tenant.tenantId, (tx) =>
+        tx
+          .update(appointments)
+          .set({ status: 'confirmed' })
+          .where(eq(appointments.id, booked.appointmentId)),
+      );
+      await setHold(extended);
+      expect((await readRow(booked.appointmentId)).holdExpiresAt).toBeNull();
+    });
+
+    it('app_worker só altera o status: não forja instantes', async () => {
+      const worker = connectAsWorker();
+      try {
+        const booked = await withTenant(db, tenant.tenantId, (tx) => createIn(tx, 'confirmed'));
+        const asWorker = (values: Partial<typeof appointments.$inferInsert>) =>
+          withTenant(
+            worker,
+            tenant.tenantId,
+            (tx) =>
+              tx.update(appointments).set(values).where(eq(appointments.id, booked.appointmentId)),
+            { actor: { type: 'system', id: 'job:no-show' } },
+          );
+        await expect(asWorker({ status: 'no_show', noShowAt: forged })).rejects.toBeInstanceOf(
+          TenantIsolationError,
+        );
+        await expect(asWorker({ completedAt: forged })).rejects.toBeInstanceOf(
+          TenantIsolationError,
+        );
+        await asWorker({ status: 'no_show' });
+        const row = await readRow(booked.appointmentId);
+        expect(row.status).toBe('no_show');
+        expect(row.noShowAt?.getUTCFullYear()).toBeGreaterThan(2000);
+      } finally {
+        await worker.$client.end();
+      }
+    });
   });
 
   it('lock otimista: UPDATE com version antiga não altera nada', async () => {

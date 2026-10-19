@@ -1,5 +1,7 @@
 # CI do monorepo: os mesmos comandos do contrato local (package.json da raiz).
-# O único check obrigatório no ruleset é `ci-ok`, que agrega os demais jobs deste arquivo.
+# Checks obrigatórios do ruleset: `ci-ok` (este arquivo, agrega os demais jobs daqui),
+# `security-ok` (security.yml) e `pr-title` (pr-title.yml, que roda também quando o título do
+# PR é editado).
 name: CI
 
 on:
@@ -45,6 +47,11 @@ jobs:
       - name: pnpm lint
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: pnpm lint
+      # Arquivos, exports e dependências sem uso (knip.json). Dependência morta no manifesto é
+      # superfície de supply chain sem benefício.
+      - name: pnpm knip
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: pnpm knip
       - name: pnpm typecheck
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: pnpm typecheck
@@ -101,6 +108,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # O compose.yaml (pnpm test:db local com Docker) promete a mesma imagem e o mesmo digest
+      # deste serviço; o Renovate atualiza os dois num PR só (grupo postgres-test-image).
+      - name: Imagem do PostgreSQL igual à do compose.yaml
+        run: |
+          ci_image="$(sed -nE 's/^ +image: (postgres:[^ ]+)$/\1/p' .github/workflows/ci.yml)"
+          compose_image="$(sed -nE 's/^ +image: (postgres:[^ ]+)$/\1/p' compose.yaml)"
+          echo "ci.yml: ${ci_image:-ausente}"
+          echo "compose.yaml: ${compose_image:-ausente}"
+          if [[ -z "${ci_image}" || "${ci_image}" != "${compose_image}" ]]; then
+            echo "::error file=compose.yaml::A imagem do PostgreSQL difere da do serviço do ci.yml (tag e digest têm de ser iguais)."
+            exit 1
+          fi
       - uses: ./.github/actions/setup
       - run: pnpm test:db
 
@@ -158,9 +177,14 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
       - run: pnpm test:hooks
+      # Os hooks são .mjs com tipos em JSDoc (checkJs): `node --test` não confere tipos, e o
+      # `pnpm typecheck` (turbo) só cobre os pacotes do workspace.
+      - name: Typecheck dos hooks
+        run: pnpm exec tsc -p .claude/hooks
 
-  # Único check obrigatório do ruleset. Falha se qualquer job acima falhar, for cancelado ou
-  # pulado; assim nenhum check fica "pendente para sempre" quando um job nem chega a rodar.
+  # Check obrigatório do ruleset (junto com security-ok, do security.yml, e pr-title, do
+  # pr-title.yml). Falha se qualquer job acima falhar, for cancelado ou pulado; assim nenhum
+  # check fica "pendente para sempre" quando um job nem chega a rodar.
   ci-ok:
     name: ci-ok
     if: ${{ always() }}

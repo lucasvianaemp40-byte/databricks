@@ -41,9 +41,13 @@ secundárias, listadas em [supply-chain.md](../seguranca/supply-chain.md#referê
 - `audit.ignore` só com justificativa e `ignorePrune`. Hoje há dois advisories de
   ferramentas de desenvolvimento sem caminho a partir de entrada de usuário:
   `GHSA-vfj7-8cjw-p6xm` (braces, via `@next/eslint-plugin-next`) e `GHSA-67mh-4wv8-2f99`
-  (servidor de dev do esbuild, via drizzle-kit).
-- `packageManager` com hash sha512, conferido contra a integrity do registry. Lockfile de um
-  documento só.
+  (servidor de dev do esbuild, via drizzle-kit). Todo risco aceito fica espelhado em **três**
+  lugares, com a mesma justificativa: `audit.ignore`, `.github/osv-scanner.toml` (com
+  `ignoreUntil`) e `allow-ghsas` do dependency-review
+  ([procedimento](../seguranca/supply-chain.md#advisory-sem-correção)).
+- `packageManager` com hash sha512, conferido contra a integrity do registry e checado pelo
+  Corepack na máquina e no CI (`.github/actions/setup` usa `corepack enable pnpm`, não uma
+  action de terceiros). Lockfile de um documento só.
 
 **Atualizações: Mend Renovate App** ([`renovate.json5`](../../renovate.json5)):
 
@@ -73,9 +77,13 @@ a documentação dele só cobre pnpm até a v10.
 
 - ruleset na branch padrão com commits assinados, PR com squash, histórico linear, sem
   force-push e sem bypass;
-- checks obrigatórios `ci-ok` e `security-ok`, vindos só do app GitHub Actions;
+- checks obrigatórios `ci-ok`, `security-ok` e `pr-title`, vindos só do app GitHub Actions;
 - CODEOWNERS em `.github/`, `.claude/`, `CLAUDE.md`, `.mcp.json`, manifestos, lockfile,
-  configuração de scanners e `packages/db/`.
+  configuração de scanners e `packages/db/`. Com uma pessoa no projeto, ele só identifica o
+  dono: o ruleset fica com `required_approving_review_count: 0` e
+  `require_code_owner_review: false`, porque ninguém aprova o próprio PR. A revisão
+  obrigatória de code owner entra com o segundo mantenedor
+  ([.github/rulesets/README.md](../../.github/rulesets/README.md#1-branch-padrão-e-ruleset)).
 
 **Varreduras** ([`security.yml`](../../.github/workflows/security.yml)):
 
@@ -83,11 +91,11 @@ a documentação dele só cobre pnpm até a v10.
 |---|---|
 | gitleaks (CLI pinado por digest) | segredos, com regras para CPF, CNPJ e tokens de PSP e Meta |
 | Semgrep | SAST, com regras próprias de multi-tenant, LGPD e fuso |
-| OSV-Scanner | dependências: diff no PR e varredura completa |
-| Trivy fs | misconfig e vulnerabilidades |
-| zizmor e actionlint | workflows |
+| OSV-Scanner | job próprio, com o binário extraído da imagem pinada por digest e decisão pelo exit code em `.github/scripts/osv-gate.sh`: no PR, só falha o que o PR acrescenta em relação à base; nos demais eventos, varredura completa |
+| Trivy fs | vulnerabilidades (dependências de produção do `pnpm-lock.yaml`). O scanner de misconfig fica desligado até existir Dockerfile ou IaC |
+| zizmor, actionlint e shellcheck | workflows, a ação composta e os scripts `*.sh` versionados (menos as skills de terceiros) |
 | `pnpm audit signatures`, `pnpm audit --audit-level high`, `pnpm sbom` (CycloneDX) | dependências do pnpm |
-| CodeQL, Scorecard e dependency-review | só com GitHub Code Security (`GHAS_ENABLED`) |
+| CodeQL, Scorecard, dependency-review e upload de SARIF | **ligados por padrão**. `GHAS_ENABLED=false` só em repositório privado sem GitHub Code Security: aí os scanners continuam bloqueando pelo exit code e os relatórios ficam como artefato |
 
 ## Consequências
 
@@ -102,13 +110,17 @@ a documentação dele só cobre pnpm até a v10.
   - o `trustPolicy` pode barrar releases legítimas sem provenance (caso do lefthook 2.2.2):
     cada exceção exige análise;
   - CodeQL, upload de SARIF, dependency-review e Scorecard exigem GitHub Code Security em repo
-    privado.
+    privado. Ficam ligados por padrão: num repositório privado sem Code Security o upload falha
+    à vista até alguém definir `GHAS_ENABLED=false`, em vez de o controle sumir em silêncio;
+  - risco aceito mantido em três lugares (`audit.ignore`, `osv-scanner.toml` e `allow-ghsas`)
+    pode divergir. O cabeçalho do `osv-scanner.toml` lembra a regra.
 - **Ações decorrentes:**
   - revisar os pins atrasados pela quarentena (Next 16.4.2, React 19.3.1, Vitest 5.0.5,
     ESLint 10.13.0, Turbo 2.11.9, Playwright 1.64.1, axe 4.14.0);
   - reavaliar o lefthook quando sair release com provenance;
   - aplicar as configurações de interface listadas em
-    [.github/rulesets/README.md](../../.github/rulesets/README.md).
+    [.github/rulesets/README.md](../../.github/rulesets/README.md), começando pela seção
+    "0. Bootstrap" (nada está aplicado ainda).
 
 ## Alternativas consideradas
 

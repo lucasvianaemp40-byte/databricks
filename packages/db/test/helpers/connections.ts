@@ -1,7 +1,7 @@
 import pg from 'pg';
 import { inject } from 'vitest';
 import { createDb, type Database } from '../../src/client';
-import { findPostgresError } from '../../src/errors';
+import { findPostgresError, type PostgresErrorInfo } from '../../src/errors';
 
 /** Banco como app_user (papel das requisições web). Feche com `db.$client.end()`. */
 export function connectAsAppUser(max = 4): Database {
@@ -33,6 +33,18 @@ export async function captureSqlState(operation: Promise<unknown>): Promise<stri
     await operation;
   } catch (error) {
     return sqlStateOf(error);
+  }
+  throw new Error('esperava um erro do banco, mas a operação foi concluída');
+}
+
+/** Executa e devolve SQLSTATE e constraint do erro esperado; falha se a promessa resolver. */
+export async function captureDatabaseError(
+  operation: Promise<unknown>,
+): Promise<PostgresErrorInfo | undefined> {
+  try {
+    await operation;
+  } catch (error) {
+    return findPostgresError(error);
   }
   throw new Error('esperava um erro do banco, mas a operação foi concluída');
 }

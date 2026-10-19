@@ -1,0 +1,92 @@
+# Propriedades do @salon/scheduling-core com volume alto, todo dia. No PR (job `test` do
+# ci.yml) cada propriedade roda 100 casos; aqui roda 2000, com sementes novas a cada execução,
+# em três fusos de processo: UTC (servidor), America/Sao_Paulo (máquina do dev, com histórico
+# de horário de verão) e Pacific/Kiritimati (UTC+14: o dia local vira antes de todos). O
+# resultado do domínio não pode depender do fuso do processo.
+#
+# Não é check obrigatório (não roda em PR). Falha aqui é bug: o resumo do run traz a semente
+# do Vitest (ordem dos testes) e a do fast-check (seed e path) para reproduzir localmente e
+# virar teste de regressão.
+#
+# Agendamento só vale com este arquivo na branch padrão (.github/rulesets/README.md, seção 0).
+name: Nightly
+
+on:
+  schedule:
+    - cron: "43 5 * * *" # todo dia 05:43 UTC (02:43 em São Paulo)
+  workflow_dispatch:
+
+# Nada por padrão; o job declara o mínimo. Nenhum segredo é usado.
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TURBO_TELEMETRY_DISABLED: "1"
+  DO_NOT_TRACK: "1"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  core-properties:
+    name: Propriedades do core (FC_NUM_RUNS=2000, TZ=${{ matrix.tz }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        tz: [UTC, America/Sao_Paulo, Pacific/Kiritimati]
+    env:
+      TZ: ${{ matrix.tz }}
+      # Com CI definido, o test/setup.ts do core interrompe a propriedade que passar de 120 s
+      # e conta a interrupção como falha (markInterruptAsFailure): lentidão não passa calada.
+      CI: "1"
+      FC_NUM_RUNS: "2000"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      # O mesmo script do PR (com cobertura e os limiares por arquivo), só com mais casos.
+      - name: pnpm --filter @salon/scheduling-core test
+        id: test
+        run: |
+          set -o pipefail
+          pnpm --filter @salon/scheduling-core test 2>&1 | tee "${RUNNER_TEMP}/core-test.log"
+      - name: Sementes para reproduzir (só em falha)
+        if: ${{ failure() && steps.test.outcome == 'failure' }}
+        run: |
+          # Sem cores ANSI; só os testes que falharam e as sementes, na ordem do log.
+          clean_log="${RUNNER_TEMP}/core-test.clean.log"
+          sed -E 's/\x1b\[[0-9;]*m//g' "${RUNNER_TEMP}/core-test.log" >"${clean_log}"
+          seeds="$(grep -oE 'FAIL .*|Running tests with seed "[0-9]+"|\{ seed: -?[0-9]+(, path: "[0-9:]*")?' "${clean_log}" \
+            | awk '!seen[$0]++' || true)"
+          {
+            echo "### Reproduzir a falha (TZ=${TZ}, FC_NUM_RUNS=${FC_NUM_RUNS})"
+            echo
+            echo '```text'
+            echo "${seeds}"
+            echo '```'
+            if ! grep -qE '\{ seed: -?[0-9]+' "${clean_log}"; then
+              echo
+              echo 'Sem seed do fast-check no log: a falha não veio de uma propriedade (cobertura, tempo ou setup; ver o passo anterior).'
+            fi
+            echo
+            echo 'Uma propriedade (seed e path do fast-check, sem cobertura):'
+            echo
+            echo '```sh'
+            echo "TZ=${TZ} FC_SEED=<seed> FC_PATH=<path> pnpm --filter @salon/scheduling-core exec vitest run <arquivo> -t '<nome do teste>'"
+            echo '```'
+            echo
+            echo 'Ordem dos arquivos e testes (semente do Vitest):'
+            echo
+            echo '```sh'
+            echo "TZ=${TZ} FC_NUM_RUNS=${FC_NUM_RUNS} pnpm --filter @salon/scheduling-core test --sequence.seed=<semente>"
+            echo '```'
+          } | tee -a "${GITHUB_STEP_SUMMARY}"

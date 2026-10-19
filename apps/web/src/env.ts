@@ -3,14 +3,19 @@
  *
  * - Falha no boot: o next.config.ts importa este módulo, então `next build`, `next dev` e
  *   `next start` abortam se alguma variável for inválida. Nada de app rodando com config errada.
- * - Separação servidor/cliente: variáveis de `server` nunca vão para o bundle do navegador;
- *   ler uma delas em código de cliente lança erro. Só as prefixadas com NEXT_PUBLIC_ (`client`)
- *   são embutidas no bundle, e por isso nunca podem conter segredos.
+ * - Variáveis de `server` são lidas em RUNTIME (o Next não as embute) e nunca vão para o
+ *   navegador; ler uma delas em código de cliente lança erro. A validação do boot e o valor que
+ *   o servidor usa são, portanto, sempre os mesmos.
+ * - Variáveis NEXT_PUBLIC_ (`client`) são embutidas pelo `next build` em TODOS os bundles,
+ *   inclusive o do servidor: o valor de runtime é ignorado e mudar exige novo build. Por isso
+ *   nunca contêm segredos e só existem quando o código de CLIENTE precisa delas. Hoje não há
+ *   nenhuma: a origem pública (APP_URL) só é usada no servidor.
  * - Mensagens de erro citam o nome da variável e a regra, nunca o valor recebido (pode ser um
  *   segredo quando entrarem DATABASE_URL e afins).
  *
- * Para adicionar uma variável: declare o schema aqui, repasse em `runtimeEnvFrom`, declare-a em
- * apps/web/turbo.json (modo estrito de env do Turborepo) e documente em apps/web/.env.example.
+ * Para adicionar uma variável: declare o schema aqui, repasse em `env` (fim do arquivo) e em
+ * RuntimeEnv, declare-a em src/types/process-env.d.ts e em apps/web/turbo.json (modo estrito
+ * de env do Turborepo) e documente em apps/web/.env.example.
  */
 import { createEnv } from '@t3-oss/env-nextjs';
 import { z } from 'zod';
@@ -41,16 +46,22 @@ const server = {
   APP_ENV: z
     .enum(APP_ENVIRONMENTS, { error: `use um destes valores: ${APP_ENVIRONMENTS.join(', ')}` })
     .default('development'),
-};
-
-const client = {
-  NEXT_PUBLIC_APP_URL: z
+  /**
+   * Origem pública do app (metadataBase: URLs absolutas de canonical, Open Graph etc.). É de
+   * servidor de propósito: como NEXT_PUBLIC_ ela era embutida no build, e um build iniciado
+   * com outra configuração (e2e promovido a produção) passava na validação do boot e
+   * respondia 500 em toda rota, ou usava a origem do build sem avisar.
+   */
+  APP_URL: z
     .url({ protocol: /^https?$/, error: 'use uma URL http(s) absoluta' })
     .refine(isBareOrigin, {
       error: 'use só a origem, sem caminho, barra final, query, fragmento ou credenciais',
     })
     .default('http://localhost:3000'),
 };
+
+/** Nenhuma variável de cliente por enquanto (ver o comentário do topo antes de criar uma). */
+const client = {};
 
 const shared = {
   NODE_ENV: z
@@ -66,11 +77,11 @@ function createFinalSchema(shape: EnvShape, isServer: boolean) {
     if (!isServer || values.APP_ENV !== 'production') {
       return;
     }
-    const appUrl = URL.parse(values.NEXT_PUBLIC_APP_URL);
+    const appUrl = URL.parse(values.APP_URL);
     if (appUrl?.protocol !== 'https:' || LOCAL_HOSTNAMES.has(appUrl.hostname)) {
       ctx.addIssue({
         code: 'custom',
-        path: ['NEXT_PUBLIC_APP_URL'],
+        path: ['APP_URL'],
         message: 'com APP_ENV=production, defina a origem pública em https',
       });
     }
@@ -100,9 +111,7 @@ function failOnInvalidEnvironment(
 }
 
 /** Nomes que o app lê do ambiente. */
-export type RuntimeEnv = Readonly<
-  Record<'APP_ENV' | 'NEXT_PUBLIC_APP_URL' | 'NODE_ENV', string | undefined>
->;
+export type RuntimeEnv = Readonly<Record<'APP_ENV' | 'APP_URL' | 'NODE_ENV', string | undefined>>;
 
 export interface CreateAppEnvOptions {
   /** Força o modo servidor/cliente (testes). Padrão: `typeof window === 'undefined'`. */
@@ -125,11 +134,11 @@ export function createAppEnv(runtimeEnv: RuntimeEnv, options: CreateAppEnvOption
 }
 
 /**
- * Acesso literal a process.env.NOME: o Next só embute no bundle do cliente as variáveis
- * NEXT_PUBLIC_ escritas assim (análise estática).
+ * Acesso literal a process.env.NOME. Para variáveis de servidor ele vira leitura em runtime;
+ * o Next só substitui pelo valor do build as NEXT_PUBLIC_ (e NODE_ENV) escritas assim.
  */
 export const env = createAppEnv({
   APP_ENV: process.env.APP_ENV,
-  NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+  APP_URL: process.env.APP_URL,
   NODE_ENV: process.env.NODE_ENV,
 });

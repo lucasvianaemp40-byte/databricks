@@ -24,6 +24,12 @@ interface OffsetSegment {
  * e mais de um trecho de offset. Um dia que não existiu (Pacific/Apia, 2011-12-30) tem
  * duração zero e nenhum trecho.
  *
+ * Atenção: o quadro garante trechos contíguos com o offset do tzdata, NÃO que todo instante
+ * nele marque a data `date`. Quando uma transição depois da meia-noite devolve o relógio à
+ * véspera (America/St_Johns até 2010: 00:01 -> 23:01 do dia anterior; Antarctica/Casey em
+ * 2010-03-05), parte do trecho seguinte marca a véspera. Quem gera horários a partir do
+ * quadro filtra pelo relógio (`wallMidnightMs - offsetMs` até + 24 h em cada trecho).
+ *
  * Calculado uma vez por dia com Temporal; o motor de disponibilidade faz o resto com
  * aritmética exata de milissegundos dentro de cada trecho.
  */
@@ -36,19 +42,52 @@ export interface LocalDayFrame {
   readonly segments: readonly OffsetSegment[];
 }
 
+/** Teto de tamanho do nome do fuso, o mesmo do banco. */
+const MAX_TIME_ZONE_LENGTH = 64;
+/** Primeiro trecho ("Área") e os seguintes ("Local") de um nome IANA aceito pelo banco. */
+const TIME_ZONE_AREA = /^[A-Za-z]+$/;
+const TIME_ZONE_LOCATION = /^[A-Za-z_+-]+$/;
+
 /**
- * Exige um identificador IANA (ex.: 'America/Sao_Paulo') ou 'UTC'.
- * Offset fixo ('-03:00') é recusado: horário de verão pode voltar e o fuso da unidade
- * precisa acompanhar o tzdata.
+ * Exige um nome IANA "Área/Local" que o tzdata conhece (ex.: 'America/Sao_Paulo', 'Etc/UTC'),
+ * com a mesma regra do CHECK do banco, que é a fonte de verdade
+ * (`app_private.is_valid_iana_timezone`, migração 0001 do @salon/db):
+ *   - formato '^[A-Za-z]+(/[A-Za-z_+-]+)+$' e no máximo 64 caracteres;
+ *   - sem "/": recusa 'UTC', 'GMT' e abreviações ('BRT'). Use 'Etc/UTC';
+ *   - sem dígito: recusa offset fixo do tzdata ('Etc/GMT+3', com o sinal invertido) e nomes
+ *     que o PostgreSQL leria como especificação POSIX ('Abc/Def3' = UTC-3 fixo);
+ *   - offset fixo ('-03:00') é recusado: o horário de verão pode voltar e o fuso da unidade
+ *     precisa acompanhar o tzdata.
+ *
+ * O formato é idêntico ao do banco, nunca mais estrito: o que o banco aceitou o core precisa
+ * aceitar (o teste de paridade do `pnpm test:db` prova isso contra o tzdata do servidor). O
+ * contrário depende do tzdata de cada lado: links legados que o ICU do runtime conhece
+ * ('US/Eastern', 'Brazil/East', 'Asia/Calcutta') passam aqui, mas um PostgreSQL sem o pacote
+ * tzdata-legacy os recusa no CHECK, que dá a palavra final.
  */
 export function assertIanaTimeZone(timeZone: string, field = 'timeZone'): void {
-  if (!/^[A-Za-z]/.test(timeZone)) {
-    throw new SchedulingInputError(field, `fuso inválido "${timeZone}": use um nome IANA`);
+  if (timeZone.length > MAX_TIME_ZONE_LENGTH) {
+    throw new SchedulingInputError(
+      field,
+      `fuso inválido: nome com ${String(timeZone.length)} caracteres (máximo ${String(MAX_TIME_ZONE_LENGTH)})`,
+    );
+  }
+  const parts = timeZone.split('/');
+  const wellFormed =
+    parts.length >= 2 &&
+    parts.every((part, index) => (index === 0 ? TIME_ZONE_AREA : TIME_ZONE_LOCATION).test(part));
+  if (!wellFormed) {
+    throw new SchedulingInputError(
+      field,
+      `fuso inválido ${JSON.stringify(timeZone)}: use um nome IANA "Área/Local" sem dígito (ex.: America/Sao_Paulo, Etc/UTC)`,
+    );
   }
   try {
     Temporal.Instant.fromEpochMilliseconds(0).toZonedDateTimeISO(timeZone);
   } catch (cause) {
-    throw new SchedulingInputError(field, `fuso desconhecido "${timeZone}"`, { cause });
+    throw new SchedulingInputError(field, `fuso desconhecido ${JSON.stringify(timeZone)}`, {
+      cause,
+    });
   }
 }
 

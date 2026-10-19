@@ -1,3 +1,4 @@
+import { MISSING_PAGE_DOCUMENT_404, MISSING_PAGE_PATH } from './support/console';
 import { expect, test } from './support/fixtures';
 
 test.describe('página inicial', () => {
@@ -38,11 +39,11 @@ test.describe('página inicial', () => {
     );
   });
 
-  test('o link "Pular para o conteúdo" é o primeiro foco e leva ao conteúdo', async ({
-    page,
-    isMobile,
-  }) => {
-    test.skip(isMobile, 'Navegação por Tab é de teclado físico (desktop).');
+  // Navegação por Tab é de teclado físico: a tag tira o teste do projeto mobile pela config
+  // (grepInvert em playwright.config.ts), sem pulo no corpo.
+  test('o link "Pular para o conteúdo" é o primeiro foco e leva ao conteúdo', {
+    tag: '@desktop-only',
+  }, async ({ page }) => {
     await page.goto('/');
 
     await page.keyboard.press('Tab');
@@ -57,10 +58,11 @@ test.describe('página inicial', () => {
 });
 
 test.describe('página não encontrada', () => {
-  test.use({ allowedConsoleErrors: [/status of 404/] });
+  // Só o 404 do próprio documento; 404 de CSS ou JS continua reprovando.
+  test.use({ allowedConsoleErrors: [MISSING_PAGE_DOCUMENT_404] });
 
   test('responde 404 em pt-BR e volta para o início por navegação no cliente', async ({ page }) => {
-    const response = await page.goto('/pagina-que-nao-existe');
+    const response = await page.goto(MISSING_PAGE_PATH);
 
     expect(response?.status()).toBe(404);
     await expect(page).toHaveTitle('Página não encontrada | Agenda Salão');

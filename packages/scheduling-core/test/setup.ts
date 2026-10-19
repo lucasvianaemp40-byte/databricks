@@ -14,7 +14,8 @@ if (!Number.isSafeInteger(numRuns) || numRuns < 1) {
 }
 
 // configureGlobal SUBSTITUI toda a configuração global: declare tudo aqui.
-// Reproduzir uma falha: FC_SEED=<seed> FC_PATH=<path> pnpm --filter @salon/scheduling-core test
+// Reproduzir uma falha (FC_PATH vale para toda propriedade da execução: filtre arquivo e teste):
+// FC_SEED=<seed> FC_PATH=<path> pnpm --filter @salon/scheduling-core exec vitest run <arquivo> -t '<nome>'
 fc.configureGlobal({
   numRuns,
   ...(FC_SEED === undefined ? {} : { seed: Number.parseInt(FC_SEED, 10) }),

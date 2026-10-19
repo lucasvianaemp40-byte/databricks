@@ -1,3 +1,4 @@
+import { unstable_doesMiddlewareMatch } from 'next/experimental/testing/server';
 import { NextRequest } from 'next/server';
 import { describe, expect, it } from 'vitest';
 import { isValidNonce } from './lib/security/nonce';
@@ -62,16 +63,56 @@ describe('proxy', () => {
     expect(csp).not.toContain("'unsafe-inline'");
     expect(csp).toContain('upgrade-insecure-requests');
   });
+});
 
-  it('cobre páginas e /api, mas não os assets estáticos com hash', () => {
-    const [matcher] = config.matcher;
-    // eslint-disable-next-line security/detect-non-literal-regexp -- padrão constante do próprio proxy.ts, não vem de entrada externa.
-    const source = new RegExp(`^${matcher?.source ?? ''}$`);
-    for (const path of ['/', '/api/health', '/salao/agendar', '/rota-inexistente']) {
-      expect(source.test(path), path).toBe(true);
-    }
-    for (const path of ['/_next/static/chunks/app.js', '/_next/image', '/favicon.ico']) {
-      expect(source.test(path), path).toBe(false);
-    }
+/**
+ * Matcher compilado pelas regras do próprio Next (path-to-regexp, sufixos .rsc/.json e
+ * `has`/`missing`), não como regex crua: um lookahead sem âncora ou um '.' sem escape no
+ * `source` só aparecem assim.
+ */
+function proxyRuns(url: string, headers: Record<string, string> = {}): boolean {
+  return unstable_doesMiddlewareMatch({ config, url, headers });
+}
+
+describe('matcher do proxy', () => {
+  it.each([
+    '/',
+    '/api/health',
+    '/salao/agendar',
+    '/rota-inexistente',
+    '/icon.svg',
+    // Documentos HTML (404 do app) que escapavam do matcher antigo por prefixo ou por '.'.
+    '/favicon.ico',
+    '/favicon.ico.bak',
+    '/faviconXico',
+    '/favicon.icoanything/abc',
+    '/_next/static',
+    '/_next/staticX',
+    '/_next/static-evil/page',
+    '/_next/imagefoo',
+    // O otimizador de imagens está desligado: /_next/image responde a página 404 do app.
+    '/_next/image',
+    // A futura página pública /[slug] não pode perder a CSP por causa do slug do salão.
+    '/favicon-ico-studio',
+    '/next-static-barbearia',
+  ])('roda em %s', (path) => {
+    expect(proxyRuns(`http://localhost${path}`)).toBe(true);
+  });
+
+  it.each([
+    '/_next/static/chunks/app.js',
+    '/_next/static/css/app.css',
+    '/_next/static/media/fonte.woff2',
+  ])('não roda nos assets estáticos com hash (%s)', (path) => {
+    expect(proxyRuns(`http://localhost${path}`)).toBe(false);
+  });
+
+  it.each([
+    ['next-router-prefetch', '1'],
+    ['next-router-prefetch', 'qualquer-valor'],
+    ['purpose', 'prefetch'],
+    ['sec-purpose', 'prefetch'],
+  ])('roda mesmo com o cabeçalho %s: %s (o cliente controla esses cabeçalhos)', (name, value) => {
+    expect(proxyRuns('http://localhost/', { [name]: value })).toBe(true);
   });
 });

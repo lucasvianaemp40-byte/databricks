@@ -3,6 +3,7 @@ import { defineConfig } from 'eslint/config';
 import {
   createBaseConfig,
   createPureDomainConfig,
+  machineTimeZoneRestrictedProperties,
   pureDomainRestrictedSyntax,
 } from '../../eslint.base.mjs';
 
@@ -16,15 +17,23 @@ const MACHINE_LOCALE_MESSAGE =
  * Regras próprias do @salon/scheduling-core, somadas às da base (eslint.base.mjs).
  * Valem também para os testes em src/: teste determinístico não lê relógio nem sorteia.
  * test/lint-rules.test.ts prova que cada regra dispara.
+ *
+ * A dica de exclusão de cobertura (no-warning-comments) vem só da base, bloco
+ * salon/cobertura-honesta, que vale para todo arquivo: test/lint-rules.test.ts prova que ela
+ * dispara em src/ e em test/ deste pacote.
  */
 export const schedulingCoreDomainRules = defineConfig({
   name: 'scheduling-core/tempo-e-aleatoriedade',
   files: ['src/**/*.ts'],
   rules: {
     // Pega também a referência sem chamada (const agora = Date.now), invisível ao
-    // no-restricted-syntax, que só olha chamadas.
+    // no-restricted-syntax, que só olha chamadas. Redeclarar no-restricted-properties
+    // SUBSTITUI as opções da base: por isso a composição com
+    // machineTimeZoneRestrictedProperties (Date.parse por chamada, referência, colchetes ou
+    // desestruturação).
     'no-restricted-properties': [
       'error',
+      ...machineTimeZoneRestrictedProperties,
       { object: 'Date', property: 'now', message: CLOCK_MESSAGE },
       { object: 'Temporal', property: 'Now', message: CLOCK_MESSAGE },
       { object: 'performance', property: 'now', message: CLOCK_MESSAGE },
@@ -39,8 +48,10 @@ export const schedulingCoreDomainRules = defineConfig({
         message: 'Importe { Temporal } de "temporal-polyfill" (troca única ao migrar p/ Node 26).',
       },
     ],
-    // Redeclarar no-restricted-syntax SUBSTITUI as opções da base: por isso a composição
-    // com pureDomainRestrictedSyntax (Date.now, new Date(), Temporal.Now, Math.random...).
+    // Redeclarar no-restricted-syntax também SUBSTITUI as opções anteriores: por isso a
+    // composição com pureDomainRestrictedSyntax (Date.now, new Date(), Temporal.Now,
+    // Math.random...). O seletor de new Date(x) abaixo já cobre todo
+    // machineTimeZoneRestrictedSyntax.
     'no-restricted-syntax': [
       'error',
       ...pureDomainRestrictedSyntax,

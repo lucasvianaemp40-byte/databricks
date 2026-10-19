@@ -15,15 +15,15 @@ documento diz **como fazer** no dia a dia. As configurações vivem em
 | Scripts de instalação | `strictDepBuilds: true` + `allowBuilds` explícito (hoje tudo negado) | `pnpm-workspace.yaml` |
 | Fontes exóticas | `blockExoticSubdeps: true` | `pnpm-workspace.yaml` |
 | Integridade | lockfile congelado no CI; `pnpm audit signatures` (ECDSA do registry) | `security.yml` |
-| Advisories | `pnpm audit --audit-level high`; OSV-Scanner no PR e completo; Trivy | `security.yml` |
+| Advisories | `pnpm audit --audit-level high`; OSV-Scanner em job próprio (`osv`): no PR, só falha o que o PR acrescenta em relação à base; nos demais eventos, varredura completa; decisão pelo exit code em `.github/scripts/osv-gate.sh` (falha da API não passa como "limpo"); Trivy (vulnerabilidades das dependências de produção do `pnpm-lock.yaml`); dependency-review no PR | `security.yml` |
 | SBOM | `pnpm sbom` CycloneDX como artefato do run | `security.yml` |
-| Gerenciador | `packageManager` com hash sha512 (Corepack) | `package.json` |
-| Atualizações | Renovate com quarentena (npm 3 dias; actions, imagens e ferramentas 7 dias; majors 14 dias com aprovação) | `renovate.json5` |
+| Gerenciador | `packageManager` com hash sha512, conferido pelo Corepack na máquina e no CI (`corepack enable pnpm` em `.github/actions/setup`, que falha com "Mismatch hashes") | `package.json` |
+| Atualizações | Renovate com quarentena (npm 3 dias; actions, imagens e ferramentas 7 dias; majors 14 dias com aprovação). A imagem do PostgreSQL de teste do `ci.yml` e do `compose.yaml` sobe junto (grupo `postgres-test-image`), e o job `test-db` falha se tag ou digest divergirem | `renovate.json5`, `ci.yml` |
 | Actions | pin por SHA completo; `permissions` mínimas; sem `pull_request_target`; `cache-mode: none` em job com segredo | `.github/workflows/` |
-| Imagens | pin por digest | `.github/workflows/` |
-| Workflows | zizmor e actionlint | `security.yml` |
+| Imagens | pin por digest, inclusive as de onde saem os binários do gitleaks e do OSV-Scanner | `.github/workflows/` |
+| Workflows e scripts | zizmor e actionlint; shellcheck (0.11.0, da própria imagem pinada do actionlint) em todo `*.sh` versionado, menos as skills de terceiros | `security.yml` |
 | Segredos | gitleaks (CLI por digest), com regras de CPF, CNPJ e tokens de PSP e Meta | `.gitleaks.toml` |
-| Revisão | CODEOWNERS em `.github/`, `.claude/`, manifestos, lockfile e configuração de scanners | `.github/CODEOWNERS` |
+| Revisão | CODEOWNERS em `.github/`, `.claude/`, manifestos, lockfile e configuração de scanners. **Hoje só informativo:** com uma pessoa no projeto, o ruleset não exige aprovação (`required_approving_review_count: 0`, `require_code_owner_review: false`). Passa a bloquear quando entrar o segundo mantenedor | `.github/CODEOWNERS`, `.github/rulesets/main.json` |
 
 ## Adicionar uma dependência
 
@@ -75,14 +75,20 @@ de 3 dias:
 ## Advisory sem correção
 
 1. Avalie se o código vulnerável é alcançável a partir de entrada de usuário em produção.
-2. Se não for, adicione o GHSA em `audit.ignore` com comentário: pacote, caminho, por que não é
-   explorável e quando revisar. O `ignorePrune` remove a entrada quando o pacote sai da árvore.
+2. Se não for, registre o risco aceito nos **três** lugares, com a mesma justificativa
+   (pacote, caminho, por que não é explorável) e o prazo de revisão:
+   - `audit.ignore` em [`pnpm-workspace.yaml`](../../pnpm-workspace.yaml), para o
+     `pnpm audit` (o `ignorePrune` remove a entrada quando o pacote sai da árvore);
+   - [`.github/osv-scanner.toml`](../../.github/osv-scanner.toml), com `ignoreUntil`, para o
+     OSV-Scanner (vencido o prazo, o scan volta a falhar);
+   - `allow-ghsas` do job `dependency-review` em
+     [`security.yml`](../../.github/workflows/security.yml).
 3. Se for, contenha o risco (validação, desligar a feature, trocar a dependência) e trate como
    incidente ([resposta a incidentes](resposta-a-incidentes.md), playbook P3).
 
-Exceções em vigor: `GHSA-vfj7-8cjw-p6xm` (braces via `@next/eslint-plugin-next`, só lint) e
-`GHSA-67mh-4wv8-2f99` (servidor de dev do esbuild via drizzle-kit, que só usa a API de
-transform).
+Exceções em vigor, nos três lugares: `GHSA-vfj7-8cjw-p6xm` (braces via
+`@next/eslint-plugin-next`, só lint) e `GHSA-67mh-4wv8-2f99` (servidor de dev do esbuild via
+drizzle-kit, que só usa a API de transform), ambas com revisão até 15/01/2027.
 
 ## Actions e imagens
 
@@ -116,9 +122,13 @@ Pendências conhecidas (17/10/2026):
 
 ## Configuração do GitHub (fora do repositório)
 
-Lista completa em [.github/rulesets/README.md](../../.github/rulesets/README.md):
+Lista completa em [.github/rulesets/README.md](../../.github/rulesets/README.md). Nada disso
+está aplicado ainda: comece pela seção "0. Bootstrap" daquele arquivo, que dá a ordem (criar
+`main` como branch padrão, ligar o relato privado de vulnerabilidades, o secret scanning e o
+dependency graph, configurar o squash com o título do PR e só então importar o ruleset, quando
+`ci-ok`, `security-ok` e `pr-title` estiverem verdes).
 
-- ruleset com commits assinados e os checks `ci-ok` e `security-ok`;
+- ruleset com commits assinados e os checks `ci-ok`, `security-ok` e `pr-title`;
 - allowlist de actions e pin obrigatório por SHA;
 - token de workflow só leitura;
 - aprovação de workflows para contribuidor externo;

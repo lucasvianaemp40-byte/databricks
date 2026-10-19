@@ -1,12 +1,13 @@
+import { randomBytes } from 'node:crypto';
 import { asc, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import type { Database } from '../../src/client';
 import * as schema from '../../src/schema';
-import { appointmentEvents, appointments, customers } from '../../src/schema';
+import { appointmentEvents, appointments, customers, occupancies } from '../../src/schema';
 import { withTenant } from '../../src/tenant';
-import { captureSqlState, connectAsAppUser } from '../helpers/connections';
+import { captureSqlState, connectAsAdmin, connectAsAppUser } from '../helpers/connections';
 import { bookAppointment, createTenantFixture, type TenantFixture } from '../helpers/fixtures';
 
 describe('withTenant: contexto por transação', () => {
@@ -175,5 +176,246 @@ describe('withTenant: contexto por transação', () => {
       withTenant(db, '00000000-0000-0000-0000-000000000000', () => Promise.resolve(1)),
     ).rejects.toThrow(TypeError);
     expect(db.$client.totalCount).toBe(before);
+  });
+});
+
+/** Percorre a cadeia `cause` (o Drizzle embrulha o erro do driver em DrizzleQueryError). */
+function errorChain(error: unknown): unknown[] {
+  const chain: unknown[] = [];
+  for (let current = error; current instanceof Error && chain.length < 8; current = current.cause) {
+    chain.push(current);
+  }
+  return chain;
+}
+
+const isTransactionClosed = (error: unknown): boolean =>
+  errorChain(error).some((link) => link instanceof Error && link.name === 'TransactionClosedError');
+
+/**
+ * O `tx` de withTenant vale só enquanto o callback roda. Sem a guarda, uma consulta que
+ * escapa do callback (builder devolvido dentro de um objeto, ramo de Promise.all que continua
+ * depois da rejeição, fire-and-forget) roda mais tarde no PoolClient já devolvido ao pool,
+ * dentro da transação de OUTRA requisição, com o tenant DELA: a RLS não percebe.
+ * O pool reaproveita primeiro a conexão liberada mais recentemente (LIFO), então a próxima
+ * transação usa a mesma conexão.
+ */
+describe('withTenant: o tx não sobrevive ao callback', () => {
+  let db: Database;
+  let admin: pg.Pool;
+  let tenantA: TenantFixture;
+  let tenantB: TenantFixture;
+
+  beforeAll(async () => {
+    db = connectAsAppUser();
+    admin = connectAsAdmin();
+    tenantA = await createTenantFixture(db);
+    tenantB = await createTenantFixture(db);
+  });
+
+  afterAll(async () => {
+    await Promise.all([db.$client.end(), admin.end()]);
+  });
+
+  it('builder devolvido num objeto e executado depois é recusado (não lê o tenant de outra transação)', async () => {
+    const escaped = await withTenant(db, tenantA.tenantId, (tx) =>
+      Promise.resolve({
+        list: tx
+          .select({ fullName: customers.fullName, tenantId: customers.tenantId })
+          .from(customers),
+      }),
+    );
+    const outcome = await withTenant(db, tenantB.tenantId, async (tx) => {
+      const own = await tx.select({ id: customers.id }).from(customers);
+      const leaked = await escaped.list.then(
+        (rows) => rows,
+        (error: unknown) => error,
+      );
+      return { own: own.length, leaked };
+    });
+    expect(outcome.own).toBeGreaterThan(0);
+    expect(isTransactionClosed(outcome.leaked), JSON.stringify(outcome.leaked)).toBe(true);
+  });
+
+  it('Promise.all com ramo que falha: o ramo irmão não grava depois, nem na transação de outro tenant', async () => {
+    const marker = `orfa-${randomBytes(4).toString('hex')}`;
+    const insideB = Promise.withResolvers<undefined>();
+    let sibling: Promise<unknown> = Promise.resolve();
+    const requestA = withTenant(db, tenantA.tenantId, (tx) => {
+      const late = (async () => {
+        await insideB.promise;
+        await tx.insert(customers).values({ fullName: marker });
+        return 'gravou';
+      })();
+      sibling = late.catch((error: unknown) => error);
+      return Promise.all([Promise.reject(new Error('validação falhou')), late]);
+    });
+    await expect(requestA).rejects.toThrow('validação falhou');
+
+    await withTenant(db, tenantB.tenantId, async (tx) => {
+      await tx.select({ id: customers.id }).from(customers).limit(1);
+      insideB.resolve(undefined);
+      await sibling;
+    });
+
+    expect(isTransactionClosed(await sibling)).toBe(true);
+    const { rows } = await admin.query<{ tenant_id: string }>(
+      'SELECT tenant_id FROM app.customers WHERE full_name = $1',
+      [marker],
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it('depois do callback a conexão volta ociosa ao pool, e a consulta atrasada não a toca', async () => {
+    const escaped = await withTenant(db, tenantA.tenantId, (tx) =>
+      Promise.resolve({ run: () => tx.execute(sql`select 1`) }),
+    );
+    expect(db.$client.idleCount).toBe(db.$client.totalCount);
+    const before = db.$client.totalCount;
+    expect(
+      isTransactionClosed(
+        await escaped.run().then(
+          () => 'executou',
+          (error: unknown) => error,
+        ),
+      ),
+    ).toBe(true);
+    expect(db.$client.totalCount).toBe(before);
+    expect(db.$client.idleCount).toBe(db.$client.totalCount);
+  });
+
+  it('conexão derrubada no meio do callback (failover): falha fechado, sem erro não capturado, e o pool a descarta', async () => {
+    const acquired: pg.PoolClient[] = [];
+    const removed: pg.PoolClient[] = [];
+    const onAcquire = (client: pg.PoolClient) => {
+      acquired.push(client);
+    };
+    const onRemove = (client: pg.PoolClient) => {
+      removed.push(client);
+    };
+    db.$client.on('acquire', onAcquire);
+    db.$client.on('remove', onRemove);
+    let outcome: unknown;
+    try {
+      outcome = await withTenant(db, tenantA.tenantId, async (tx) => {
+        const [connection] = acquired;
+        const { rows } = await tx.execute<{ pid: number }>(sql`select pg_backend_pid() as pid`);
+        const ended = new Promise((resolve) => {
+          connection?.once('end', resolve);
+        });
+        await admin.query('SELECT pg_terminate_backend($1)', [rows[0]?.pid]);
+        // O cliente recebeu o FATAL sem consulta ativa (emite 'error') e o fim do socket.
+        await ended;
+        return 'fim do callback';
+      }).then(
+        () => 'concluiu',
+        (error: unknown) => error,
+      );
+    } finally {
+      db.$client.off('acquire', onAcquire);
+      db.$client.off('remove', onRemove);
+    }
+    // O COMMIT não tem como acontecer: withTenant rejeita, e a conexão sai do pool.
+    expect(outcome).toBeInstanceOf(Error);
+    expect(acquired).toHaveLength(1);
+    expect(removed).toEqual(acquired);
+    await expect(
+      withTenant(db, tenantA.tenantId, (tx) => tx.execute(sql`select 1`)),
+    ).resolves.toBeDefined();
+  });
+});
+
+/**
+ * withTenant fixa READ COMMITTED: o FOR SHARE do trigger occupancies_derive_active só
+ * serializa ocupação nova x mudança de status nesse nível. Em REPEATABLE READ (padrão do
+ * banco/papel/URL alterado), o UPDATE de sincronização usaria o snapshot antigo e deixaria
+ * ativa a ocupação criada em paralelo a um cancelamento.
+ */
+describe('withTenant: nível de isolamento fixo', () => {
+  let db: Database;
+  let repeatableReadPool: pg.Pool;
+  let repeatableRead: Database;
+  let tenant: TenantFixture;
+
+  beforeAll(async () => {
+    db = connectAsAppUser();
+    repeatableReadPool = new pg.Pool({
+      connectionString: inject('appUserDatabaseUrl'),
+      max: 1,
+      options: '-c default_transaction_isolation=repeatable\\ read',
+    });
+    repeatableRead = drizzle({ client: repeatableReadPool, schema });
+    tenant = await createTenantFixture(db);
+  });
+
+  afterAll(async () => {
+    await Promise.all([db.$client.end(), repeatableReadPool.end()]);
+  });
+
+  it('abre a transação em READ COMMITTED mesmo com outro padrão na sessão', async () => {
+    const { rows } = await repeatableReadPool.query<{ transaction_isolation: string }>(
+      'SHOW transaction_isolation',
+    );
+    expect(rows[0]?.transaction_isolation).toBe('repeatable read');
+    for (const readOnly of [false, true]) {
+      const level = await withTenant(
+        repeatableRead,
+        tenant.tenantId,
+        async (tx) =>
+          (await tx.execute<{ transaction_isolation: string }>(sql`SHOW transaction_isolation`))
+            .rows[0]?.transaction_isolation,
+        { readOnly },
+      );
+      expect(level, `readOnly=${String(readOnly)}`).toBe('read committed');
+    }
+  });
+
+  it('ocupação nova concorrente a um cancelamento termina inativa', async () => {
+    const [ana] = tenant.staffIds;
+    const at = (iso: string) => new Date(iso);
+    const booked = await withTenant(db, tenant.tenantId, (tx) =>
+      bookAppointment(tx, tenant, {
+        staffId: ana,
+        startsAt: at('2027-04-05T13:00:00Z'),
+        endsAt: at('2027-04-05T14:00:00Z'),
+        // Fase de trabalho e pausa: a 2ª ocupação (na pausa) entra depois, em paralelo ao cancelamento.
+        item: {
+          phases: [
+            { kind: 'work', minutes: 30 },
+            { kind: 'pause', minutes: 30 },
+          ],
+        },
+        occupancies: [{ startsAt: at('2027-04-05T13:00:00Z'), endsAt: at('2027-04-05T13:30:00Z') }],
+      }),
+    );
+    const secondPhaseCommitted = Promise.withResolvers<undefined>();
+    const cancellation = withTenant(repeatableRead, tenant.tenantId, async (tx) => {
+      // Primeira consulta: em REPEATABLE READ, o snapshot da transação inteira nasce aqui.
+      await tx.select({ id: appointments.id }).from(appointments).limit(1);
+      await secondPhaseCommitted.promise;
+      await tx
+        .update(appointments)
+        .set({ status: 'cancelled_by_salon' })
+        .where(eq(appointments.id, booked.appointmentId));
+    });
+    await withTenant(db, tenant.tenantId, (tx) =>
+      tx.insert(occupancies).values({
+        appointmentId: booked.appointmentId,
+        appointmentItemId: booked.itemId,
+        staffId: ana,
+        startsAt: at('2027-04-05T13:30:00Z'),
+        endsAt: at('2027-04-05T14:00:00Z'),
+      }),
+    );
+    secondPhaseCommitted.resolve(undefined);
+    await cancellation;
+
+    const rows = await withTenant(db, tenant.tenantId, (tx) =>
+      tx
+        .select({ active: occupancies.active })
+        .from(occupancies)
+        .where(eq(occupancies.appointmentId, booked.appointmentId)),
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => !row.active)).toBe(true);
   });
 });

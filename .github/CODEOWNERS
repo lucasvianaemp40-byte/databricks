@@ -6,7 +6,8 @@
 *                           @lucasvianaemp40-byte
 
 # Automação, CI e agentes: superfície de supply chain (workflows, hooks e instruções de IA são
-# alvo de worms como Shai-Hulud). Sempre revisão humana.
+# alvo de worms como Shai-Hulud). Revisão humana obrigatória assim que o ruleset ligar
+# require_code_owner_review; até lá, só identifica o dono.
 /.github/                   @lucasvianaemp40-byte
 /.claude/                   @lucasvianaemp40-byte
 /.mcp.json                  @lucasvianaemp40-byte

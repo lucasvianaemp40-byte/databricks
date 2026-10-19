@@ -1,5 +1,6 @@
 import { fc, it } from '@fast-check/vitest';
 import { describe, expect } from 'vitest';
+import { EXPECTED_TRANSITIONS } from '../../test/support/appointment-transitions';
 import {
   APPOINTMENT_STATUSES,
   type AppointmentStatus,
@@ -31,6 +32,8 @@ describe('máquina de estados do agendamento (propriedades)', { tags: ['property
       let status: AppointmentStatus = initial;
       for (const target of attempts) {
         const result = transitionAppointmentStatus(status, target);
+        // Oráculo independente (tabela escrita à mão) + coerência com a API pública.
+        expect(result.ok).toBe(EXPECTED_TRANSITIONS[status].includes(target));
         expect(result.ok).toBe(canTransition(status, target));
         if (result.ok) {
           expect(result).toEqual({ ok: true, from: status, to: target });
@@ -46,7 +49,9 @@ describe('máquina de estados do agendamento (propriedades)', { tags: ['property
     'o código de erro deve classificar exatamente o motivo da recusa',
     (from, to) => {
       const result = transitionAppointmentStatus(from, to);
+      expect(isTerminalStatus(from)).toBe(EXPECTED_TRANSITIONS[from].length === 0);
       if (result.ok) {
+        expect(EXPECTED_TRANSITIONS[from]).toContain(to);
         expect(allowedTransitions(from)).toContain(to);
         return;
       }

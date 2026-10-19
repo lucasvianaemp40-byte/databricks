@@ -13,8 +13,17 @@ CREATE SCHEMA app_private;
 ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 --> statement-breakpoint
 -- Aceita apenas nomes IANA "Area/Local" que o tzdata do servidor reconhece
--- (America/Sao_Paulo, America/Manaus, Etc/UTC). Recusa abreviações ("BRT"), offsets fixos
--- ("UTC-3", "-03:00") e nomes inexistentes. STABLE: depende do tzdata instalado.
+-- (America/Sao_Paulo, America/Manaus, America/Port-au-Prince, Etc/UTC). Recusa abreviações
+-- ("BRT"), offsets fixos ("UTC-3", "-03:00", "Etc/GMT+3") e nomes inexistentes.
+--
+-- Sem dígitos: o PostgreSQL lê um nome que não acha no tzdata como especificação POSIX
+-- ("Abc/Def3" = UTC-3 fixo, "America/Sao_Paulo3BRST" = regras de verão inventadas). Toda
+-- especificação POSIX exige offset numérico e nenhum nome do tzdata tem dígito fora de
+-- Etc/GMT±N (offset fixo, proibido de propósito). Mais barato que consultar
+-- pg_timezone_names (~10 ms por chamada) a cada CHECK.
+--
+-- STABLE: depende do tzdata instalado no servidor. Links legados (Brazil/East) só existem
+-- com o pacote tzdata-legacy; o cadastro usa os nomes canônicos.
 CREATE FUNCTION app_private.is_valid_iana_timezone(tz text)
 RETURNS boolean
 LANGUAGE plpgsql
@@ -22,7 +31,7 @@ STABLE
 SET search_path = pg_catalog, pg_temp
 AS $$
 BEGIN
-  IF tz IS NULL OR char_length(tz) > 64 OR tz !~ '^[A-Za-z]+(/[A-Za-z0-9_+-]+)+$' THEN
+  IF tz IS NULL OR char_length(tz) > 64 OR tz !~ '^[A-Za-z]+(/[A-Za-z_+-]+)+$' THEN
     RETURN false;
   END IF;
   PERFORM now() AT TIME ZONE tz;

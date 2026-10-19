@@ -23,6 +23,26 @@ export function wrong(): unknown[] {
     Intl.DateTimeFormat().resolvedOptions().timeZone,
     // ruleid: server-timezone-date
     new Date(2026, 10, 3, 9, 0),
+    // Data-hora em texto sem Z/offset: interpretada no fuso do processo.
+    // ruleid: server-timezone-date
+    new Date('2026-10-17T10:00:00'),
+    // ruleid: server-timezone-date
+    Date.parse('2026-10-17 10:00'),
+    // ruleid: server-timezone-date
+    new Date('2026-10-17T10:00:00.123'),
+    // ruleid: server-timezone-date
+    new Date(`2026-10-17T10:00`),
+    // ruleid: server-timezone-date
+    new Date(`${String(priceCents)}T10:00`),
+    // O V8 também lê no fuso local o 't' minúsculo e o ano expandido (±AAAAAA).
+    // ruleid: server-timezone-date
+    new Date('2026-10-17t10:00'),
+    // ruleid: server-timezone-date
+    Date.parse('+002026-10-17T10:00:00'),
+    // ruleid: server-timezone-date
+    new Date('-000001-01-01 00:00'),
+    // ruleid: server-timezone-date
+    new Date(`${String(priceCents)}t10:00`),
   ];
 }
 
@@ -44,5 +64,24 @@ export function right(): unknown[] {
     (priceCents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }),
     // ok: server-timezone-date
     new Date(Date.UTC(2026, 10, 3, 12, 0)),
+    // Com Z ou offset explícito, ou só data (ECMA-262 trata 'AAAA-MM-DD' como UTC).
+    // ok: server-timezone-date
+    new Date('2026-10-17T10:00:00Z'),
+    // ok: server-timezone-date
+    new Date('2026-10-17T10:00:00-03:00'),
+    // ok: server-timezone-date
+    Date.parse('2026-10-17T10:00:00.000+00:00'),
+    // ok: server-timezone-date
+    new Date('2026-10-17'),
+    // ok: server-timezone-date
+    new Date(startsAt.getTime()),
+    // ok: server-timezone-date
+    new Date(`${String(priceCents)}T10:00:00Z`),
+    // ok: server-timezone-date
+    new Date('+002026-10-17T10:00:00Z'),
+    // ok: server-timezone-date
+    new Date('2026-10-17t10:00z'),
+    // ok: server-timezone-date
+    new Date('+002026-10-17'),
   ];
 }

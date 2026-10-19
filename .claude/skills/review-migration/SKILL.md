@@ -2,10 +2,6 @@
 name: review-migration
 description: Revisa migrações PostgreSQL novas ou alteradas do @salon/db (RLS por tenant, imutabilidade, locks na transação única do runner, integridade, EXCLUDE anti-dupla-reserva). Use sempre que criar migração ou alterar o schema do banco, antes do commit.
 argument-hint: "[arquivos de migração]"
-paths:
-  - "packages/db/drizzle/**"
-  - "packages/db/src/schema/**"
-  - "packages/db/**/migrations/**"
 context: fork
 agent: migration-reviewer
 background: false

@@ -22,9 +22,9 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: false
+# Sem `concurrency` no nível do workflow: todo comentário (de qualquer conta, o repositório é
+# público) cria um run, e um run novo no mesmo grupo cancelaria o pedido @claude que estivesse
+# na fila. A concorrência fica no job `claude`, que só existe quando o gate passa.
 
 jobs:
   gate:
@@ -65,6 +65,12 @@ jobs:
     name: Claude
     needs: gate
     if: ${{ needs.gate.outputs.enabled == 'true' }}
+    # Um @claude por issue/PR de cada vez, em fila. `queue: max` (até 100 pendentes): com o
+    # padrão `single`, um pedido novo cancelaria o que já estava esperando.
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     cache-mode: none

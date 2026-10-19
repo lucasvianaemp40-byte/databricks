@@ -93,7 +93,8 @@ describe('catálogo: RLS, papéis e privilégios', () => {
 
   it('papéis de runtime: sem SUPERUSER/BYPASSRLS/CREATEROLE/CREATEDB e sem herdar nenhum papel', async () => {
     const { rows } = await admin.query(`
-      SELECT rolname, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolreplication, rolinherit
+      SELECT rolname, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolreplication, rolinherit,
+             rolcanlogin
         FROM pg_roles WHERE rolname IN ('app_user', 'app_worker', 'app_migrator') ORDER BY rolname`);
     expect(rows).toEqual([
       {
@@ -104,6 +105,8 @@ describe('catálogo: RLS, papéis e privilégios', () => {
         rolcreatedb: false,
         rolreplication: false,
         rolinherit: false,
+        // O dono só é assumido por SET ROLE no deploy: logado, desligaria a RLS.
+        rolcanlogin: false,
       },
       {
         rolname: 'app_user',
@@ -113,6 +116,7 @@ describe('catálogo: RLS, papéis e privilégios', () => {
         rolcreatedb: false,
         rolreplication: false,
         rolinherit: false,
+        rolcanlogin: true,
       },
       {
         rolname: 'app_worker',
@@ -122,6 +126,7 @@ describe('catálogo: RLS, papéis e privilégios', () => {
         rolcreatedb: false,
         rolreplication: false,
         rolinherit: false,
+        rolcanlogin: true,
       },
     ]);
 
@@ -130,7 +135,7 @@ describe('catálogo: RLS, papéis e privilégios', () => {
     const { rows: memberships } = await admin.query(`
       SELECT u.rolname AS member, r.rolname AS role
         FROM pg_roles u CROSS JOIN pg_roles r
-       WHERE u.rolname IN ('app_user', 'app_worker') AND r.oid <> u.oid
+       WHERE u.rolname IN ('app_user', 'app_worker', 'app_migrator') AND r.oid <> u.oid
          AND pg_has_role(u.oid, r.oid, 'MEMBER')`);
     expect(memberships).toEqual([]);
   });
@@ -188,6 +193,34 @@ describe('catálogo: RLS, papéis e privilégios', () => {
     }
   });
 
+  it('app_worker só tem UPDATE por coluna (status, active); ninguém da aplicação apaga ou move ocupação', async () => {
+    const { rows: tableLevel } = await admin.query(`
+      SELECT c.relname AS table, pg_get_userbyid(acl.grantee) AS grantee, acl.privilege_type
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+       CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
+       WHERE n.nspname = 'app'
+         AND acl.privilege_type IN ('UPDATE', 'DELETE')
+         AND (pg_get_userbyid(acl.grantee) = 'app_worker'
+              OR (c.relname = 'occupancies'
+                  AND pg_get_userbyid(acl.grantee) IN ('app_user', 'app_worker')))`);
+    expect(tableLevel).toEqual([]);
+
+    const { rows: columns } = await admin.query(`
+      SELECT pg_get_userbyid(acl.grantee) AS grantee, c.relname || '.' || a.attname AS column
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+       CROSS JOIN LATERAL aclexplode(a.attacl) AS acl
+       WHERE n.nspname = 'app' AND acl.privilege_type = 'UPDATE'
+       ORDER BY 1, 2`);
+    expect(columns).toEqual([
+      { grantee: 'app_user', column: 'occupancies.active' },
+      { grantee: 'app_worker', column: 'appointments.status' },
+      { grantee: 'app_worker', column: 'occupancies.active' },
+    ]);
+  });
+
   it('PUBLIC não tem privilégio em app nem em app_private; runtime não acessa app_private', async () => {
     const { rows } = await admin.query(`
       SELECT nspname,
@@ -214,12 +247,15 @@ describe('catálogo: RLS, papéis e privilégios', () => {
     expect(rows[0]).toEqual({ can_set: false, worker_can_set: false });
   });
 
-  it('nenhuma função SECURITY DEFINER é executável pelos papéis de runtime', async () => {
+  it('nenhuma função SECURITY DEFINER (em schema nenhum) é executável pela aplicação ou por PUBLIC', async () => {
     const { rows } = await admin.query(`
       SELECT p.oid::regprocedure::text AS fn, r AS role
         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-       CROSS JOIN unnest(ARRAY['app_user', 'app_worker']) AS r
-       WHERE n.nspname IN ('app', 'app_private') AND p.prosecdef
+       CROSS JOIN unnest(ARRAY['app_user', 'app_worker', 'public']) AS r
+       WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_%'
+         AND NOT EXISTS (SELECT FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass
+                            AND d.objid = p.oid AND d.deptype = 'e')
+         AND p.prosecdef
          AND has_function_privilege(r, p.oid, 'EXECUTE')`);
     expect(rows).toEqual([]);
   });
@@ -303,6 +339,175 @@ describe('catálogo: RLS, papéis e privilégios', () => {
       'papel de runtime herdando outro',
       'GRANT app_migrator TO app_user',
       /app_user é membro de app_migrator/,
+    ],
+    [
+      'política de tenant só para um papel',
+      'ALTER POLICY tenant_isolation ON app.customers TO app_worker',
+      /app\.customers: sem política RESTRICTIVE de tenant canônica/,
+    ],
+    [
+      'política de tenant sempre verdadeira',
+      'ALTER POLICY tenant_isolation ON app.customers USING (true) WITH CHECK (true)',
+      /app\.customers: sem política RESTRICTIVE de tenant canônica/,
+    ],
+    [
+      'guarda RESTRICTIVE só para SELECT (INSERT/UPDATE sem guarda)',
+      `DROP POLICY tenant_isolation ON app.customers;
+       CREATE POLICY tenant_select ON app.customers AS RESTRICTIVE FOR SELECT TO PUBLIC
+         USING (tenant_id = (SELECT NULLIF(current_setting('app.tenant_id', true), '')::uuid))`,
+      /app\.customers: sem política RESTRICTIVE de tenant canônica/,
+    ],
+    [
+      'SECURITY DEFINER executável pela aplicação em schema novo',
+      `CREATE SCHEMA app_api;
+       GRANT USAGE ON SCHEMA app_api TO app_user;
+       CREATE FUNCTION app_api.forge() RETURNS integer LANGUAGE sql SECURITY DEFINER
+         SET search_path = pg_catalog AS 'SELECT 1';
+       REVOKE EXECUTE ON FUNCTION app_api.forge() FROM PUBLIC;
+       GRANT EXECUTE ON FUNCTION app_api.forge() TO app_user`,
+      /app_api\.forge\(\) \(SECURITY DEFINER\) executável por app_user/,
+    ],
+    [
+      'SECURITY DEFINER sem search_path fixo',
+      `CREATE FUNCTION app_private.no_search_path() RETURNS integer LANGUAGE sql SECURITY DEFINER
+         AS 'SELECT 1';
+       ALTER FUNCTION app_private.no_search_path() OWNER TO app_migrator;
+       REVOKE EXECUTE ON FUNCTION app_private.no_search_path() FROM PUBLIC`,
+      /app_private\.no_search_path\(\) \(SECURITY DEFINER\) sem search_path fixo/,
+    ],
+    [
+      'função em app_private com dono app_user',
+      `CREATE FUNCTION app_private.owned() RETURNS integer LANGUAGE sql AS 'SELECT 1';
+       ALTER FUNCTION app_private.owned() OWNER TO app_user`,
+      /função app_private\.owned\(\) pertence a app_user/,
+    ],
+    [
+      'tabela de tenant em schema novo com TRUNCATE para a aplicação',
+      `CREATE SCHEMA app_x;
+       CREATE TABLE app_x.t (tenant_id uuid NOT NULL);
+       ALTER TABLE app_x.t ENABLE ROW LEVEL SECURITY;
+       ALTER TABLE app_x.t FORCE ROW LEVEL SECURITY;
+       CREATE POLICY tenant_isolation ON app_x.t AS RESTRICTIVE FOR ALL TO PUBLIC
+         USING (tenant_id = (SELECT NULLIF(current_setting('app.tenant_id', true), '')::uuid))
+         WITH CHECK (tenant_id = (SELECT NULLIF(current_setting('app.tenant_id', true), '')::uuid));
+       GRANT USAGE ON SCHEMA app_x TO app_user;
+       GRANT TRUNCATE ON app_x.t TO app_user`,
+      /app_x\.t: privilégio TRUNCATE concedido a app_user/,
+    ],
+    [
+      'USAGE de PUBLIC no schema app',
+      'GRANT USAGE ON SCHEMA app TO PUBLIC',
+      /schema app: USAGE para PUBLIC/,
+    ],
+    [
+      'CREATE no schema app para a aplicação',
+      'GRANT CREATE ON SCHEMA app TO app_user',
+      /app_user pode criar objetos no schema app/,
+    ],
+    [
+      'trigger append-only removido',
+      'DROP TRIGGER appointment_events_append_only ON app.appointment_events',
+      /trigger appointment_events_append_only em app\.appointment_events ausente/,
+    ],
+    [
+      'trigger que deriva a ocupação desabilitado',
+      'ALTER TABLE app.occupancies DISABLE TRIGGER occupancies_derive_active',
+      /trigger occupancies_derive_active em app\.occupancies ausente ou desabilitado/,
+    ],
+    [
+      'cobertura do item recriada para AFTER UPDATE (item novo deixaria de ser conferido)',
+      `DROP TRIGGER appointment_items_occupancy_required ON app.appointment_items;
+       CREATE CONSTRAINT TRIGGER appointment_items_occupancy_required
+         AFTER UPDATE ON app.appointment_items DEFERRABLE INITIALLY DEFERRED
+         FOR EACH ROW EXECUTE FUNCTION app_private.appointments_assert_occupancy()`,
+      /trigger appointment_items_occupancy_required em app\.appointment_items com definição inesperada/,
+    ],
+    [
+      'cobertura da visita recriada como trigger comum (sem adiar para o COMMIT)',
+      `DROP TRIGGER appointments_occupancy_required ON app.appointments;
+       CREATE TRIGGER appointments_occupancy_required
+         AFTER INSERT OR UPDATE OF status ON app.appointments
+         FOR EACH ROW EXECUTE FUNCTION app_private.appointments_assert_occupancy()`,
+      /trigger appointments_occupancy_required em app\.appointments com definição inesperada/,
+    ],
+    [
+      'imutabilidade do item apontada para outra função',
+      `DROP TRIGGER appointment_items_guard_schedule ON app.appointment_items;
+       CREATE TRIGGER appointment_items_guard_schedule
+         BEFORE UPDATE OR DELETE ON app.appointment_items
+         FOR EACH ROW EXECUTE FUNCTION app_private.touch_updated_at()`,
+      /trigger appointment_items_guard_schedule em app\.appointment_items com definição inesperada/,
+    ],
+    [
+      'auditoria desligada por WHEN (false)',
+      `DROP TRIGGER appointments_write_event ON app.appointments;
+       CREATE TRIGGER appointments_write_event
+         AFTER INSERT OR UPDATE OF status ON app.appointments
+         FOR EACH ROW WHEN (false) EXECUTE FUNCTION app_private.appointments_write_event()`,
+      /trigger appointments_write_event em app\.appointments com definição inesperada/,
+    ],
+    [
+      'sincronia das ocupações disparando em outra coluna',
+      `DROP TRIGGER appointments_sync_occupancies ON app.appointments;
+       CREATE TRIGGER appointments_sync_occupancies
+         AFTER UPDATE OF version ON app.appointments
+         FOR EACH ROW EXECUTE FUNCTION app_private.appointments_sync_occupancies()`,
+      /trigger appointments_sync_occupancies em app\.appointments com definição inesperada/,
+    ],
+    [
+      'EXCLUDE anti-overbooking removido',
+      'ALTER TABLE app.occupancies DROP CONSTRAINT occupancies_no_staff_overlap',
+      /EXCLUDE occupancies_no_staff_overlap em app\.occupancies ausente/,
+    ],
+    ['dono com LOGIN', 'ALTER ROLE app_migrator LOGIN', /app_migrator precisa ser NOLOGIN/],
+    [
+      'dono herdando outro papel',
+      'GRANT pg_read_all_data TO app_migrator',
+      /app_migrator é membro de pg_read_all_data/,
+    ],
+    [
+      'UPDATE de tabela inteira para app_worker',
+      'GRANT UPDATE ON app.customers TO app_worker',
+      /app\.customers: privilégio UPDATE na tabela inteira/,
+    ],
+    [
+      'DELETE de ocupação para a aplicação',
+      'GRANT DELETE ON app.occupancies TO app_user',
+      /app\.occupancies: privilégio DELETE \(ocupação não se apaga nem se move\)/,
+    ],
+    [
+      'UPDATE do horário da ocupação para a aplicação',
+      'GRANT UPDATE (starts_at) ON app.occupancies TO app_user',
+      /app\.occupancies: privilégio UPDATE \(coluna starts_at; só active\)/,
+    ],
+    [
+      'materialized view com dados de tenant legível pela aplicação (sem RLS)',
+      `CREATE MATERIALIZED VIEW app.leak AS SELECT * FROM app.customers WITH NO DATA;
+       GRANT SELECT ON app.leak TO app_user`,
+      /app\.leak: materialized view ou foreign table legível pela aplicação/,
+    ],
+    [
+      'INSERT na auditoria para a aplicação',
+      'GRANT INSERT ON app.appointment_events TO app_user',
+      /app\.appointment_events: privilégio INSERT/,
+    ],
+    [
+      'DELETE de agendamento para a aplicação',
+      'GRANT DELETE ON app.appointments TO app_user',
+      /app\.appointments: privilégio DELETE/,
+    ],
+    [
+      'app_worker apagando dados',
+      'GRANT DELETE ON app.customers TO app_worker',
+      /app\.customers: privilégio DELETE .*app_worker/,
+    ],
+    [
+      'SECURITY DEFINER com search_path sem pg_temp no fim',
+      `CREATE FUNCTION app_private.weak_path() RETURNS integer LANGUAGE sql SECURITY DEFINER
+         SET search_path = pg_temp, pg_catalog AS 'SELECT 1';
+       ALTER FUNCTION app_private.weak_path() OWNER TO app_migrator;
+       REVOKE EXECUTE ON FUNCTION app_private.weak_path() FROM PUBLIC`,
+      /app_private\.weak_path\(\) \(SECURITY DEFINER\) sem search_path fixo/,
     ],
   ])('assert_security_invariants() detecta sabotagem: %s', async (_label, sabotage, expected) => {
     const client = await admin.connect();

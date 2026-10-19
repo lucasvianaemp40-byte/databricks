@@ -208,6 +208,102 @@ ALTER TABLE app.probe FORCE ROW LEVEL SECURITY;`,
     expect(leftovers).toEqual([{ table: null, applied: EXPECTED_TAGS.length }]);
   });
 
+  async function migratedWith(extra: readonly (readonly [string, string])[]): Promise<{
+    url: string;
+    run: Promise<unknown>;
+  }> {
+    const url = await scratchDatabase();
+    await runMigrations({ databaseUrl: url });
+    const folder = copyMigrations();
+    extra.forEach(([tag, content], index) => {
+      addMigration(folder, tag, lastWhen() + 1000 * (index + 1), content);
+    });
+    return { url, run: runMigrations({ databaseUrl: url, migrationsFolder: folder }) };
+  }
+
+  async function historyAndGuard(url: string) {
+    return query<{ applied: number; guard: boolean }>(
+      url,
+      `SELECT (SELECT count(*)::int FROM drizzle.__drizzle_migrations) AS applied,
+              EXISTS (SELECT FROM pg_policy WHERE polrelid = 'app.customers'::regclass
+                         AND polname = 'tenant_isolation') AS guard`,
+    );
+  }
+
+  it('migração que apaga a função de invariantes (e a política de tenant) é revertida: falha fechada', async () => {
+    const { url, run } = await migratedWith([
+      [
+        '0004_sabotage',
+        `DROP FUNCTION app_private.assert_security_invariants();
+--> statement-breakpoint
+DROP POLICY tenant_isolation ON app.customers;`,
+      ],
+    ]);
+    await expect(run).rejects.toBeInstanceOf(MigrationError);
+    await expect(run).rejects.toThrow(/função de invariantes .*ausente/);
+    expect(await historyAndGuard(url)).toEqual([{ applied: EXPECTED_TAGS.length, guard: true }]);
+  });
+
+  it('migração que troca o corpo da função de invariantes é revertida (hash do corpo)', async () => {
+    const { url, run } = await migratedWith([
+      [
+        '0004_sabotage',
+        `CREATE OR REPLACE FUNCTION app_private.assert_security_invariants() RETURNS void
+LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$ BEGIN END $$;
+--> statement-breakpoint
+DROP POLICY tenant_isolation ON app.customers;`,
+      ],
+    ]);
+    await expect(run).rejects.toThrow(/função de invariantes .*foi alterada/);
+    expect(await historyAndGuard(url)).toEqual([{ applied: EXPECTED_TAGS.length, guard: true }]);
+  });
+
+  it('renomear a função de invariantes não desliga o portão para a migração seguinte', async () => {
+    const { url, run } = await migratedWith([
+      [
+        '0004_rename',
+        'ALTER FUNCTION app_private.assert_security_invariants() RENAME TO old_invariants;',
+      ],
+      [
+        '0005_forgot_rls',
+        'CREATE TABLE app.gift_cards (id uuid PRIMARY KEY, tenant_id uuid NOT NULL);',
+      ],
+    ]);
+    await expect(run).rejects.toThrow(/função de invariantes .*ausente/);
+    const leftovers = await query<{ table: string | null }>(
+      url,
+      "SELECT to_regclass('app.gift_cards')::text AS table",
+    );
+    expect(leftovers).toEqual([{ table: null }]);
+  });
+
+  describe('papel dono (app_migrator) é do cluster', () => {
+    const adminQuery = (text: string) => query(inject('maintenanceDatabaseUrl'), text);
+
+    afterEach(async () => {
+      await adminQuery('ALTER ROLE app_migrator NOLOGIN NOINHERIT PASSWORD NULL');
+    });
+
+    it('bootstrap corrige app_migrator reaproveitado com LOGIN, INHERIT e senha', async () => {
+      await adminQuery("ALTER ROLE app_migrator LOGIN INHERIT PASSWORD 'senha-de-teste'");
+      const url = await scratchDatabase();
+      await runMigrations({ databaseUrl: url });
+      const roles = await query<{ login: boolean; inherit: boolean; password: boolean }>(
+        url,
+        `SELECT rolcanlogin AS login, rolinherit AS inherit, rolpassword IS NOT NULL AS password
+           FROM pg_authid WHERE rolname = 'app_migrator'`,
+      );
+      expect(roles).toEqual([{ login: false, inherit: false, password: false }]);
+    });
+
+    it('dono com LOGIN depois do deploy: a próxima execução do runner falha', async () => {
+      const url = await scratchDatabase();
+      await runMigrations({ databaseUrl: url });
+      await adminQuery('ALTER ROLE app_migrator LOGIN');
+      await expect(runMigrations({ databaseUrl: url })).rejects.toThrow(/app_migrator/);
+    });
+  });
+
   it('erro de SQL identifica a migração e o comando, e desfaz a execução inteira', async () => {
     const url = await scratchDatabase();
     const folder = copyMigrations();

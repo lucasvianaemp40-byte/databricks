@@ -1,0 +1,42 @@
+# Tabela de tenant importada de @salon/db com alias (complemento de drizzle-tenant-scope).
+#
+# A drizzle-tenant-scope reconhece a tabela pelo NOME (customers, appointments...): com
+# `import { customers as c }`, a query `db.select().from(c)` escaparia dela. Importar tabela de
+# tenant com alias é proibido fora do pacote de dados; alias de outros símbolos (withTenant,
+# TenantTransaction, funções do drizzle-orm) continua livre.
+#
+# Limite conhecido (heurística por nome): não pega `const t = customers` nem reexportação por
+# um módulo local. A RLS com FORCE continua sendo a camada que faz esse erro falhar fechado.
+rules:
+  - id: drizzle-tenant-alias
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      Tabela de tenant '$ORIG' importada de @salon/db com alias ('$ALIAS'). A regra
+      drizzle-tenant-scope identifica tabelas pelo nome: importe sem alias para que toda query
+      nela continue verificada (withTenant ou TenantTransaction).
+    paths:
+      include:
+        - /apps/
+        - /packages/
+      exclude:
+        - /packages/db/src/
+        - /packages/db/test/
+    patterns:
+      - pattern: import { ..., $ORIG as $ALIAS, ... } from "@salon/db";
+      - metavariable-regex:
+          metavariable: $ORIG
+          # Mesma lista da drizzle-tenant-scope (tabelas do schema `app`).
+          regex: ^(tenants|locations|staff|services|staffServices|workingHours|timeOff|customers|appointments|appointmentItems|occupancies|appointmentEvents)$
+    metadata:
+      category: security
+      subcategory: [audit]
+      cwe:
+        - "CWE-639: Authorization Bypass Through User-Controlled Key"
+      owasp:
+        - "A01:2025 - Broken Access Control"
+      confidence: HIGH
+      likelihood: LOW
+      impact: HIGH
+      references:
+        - https://www.postgresql.org/docs/current/ddl-rowsecurity.html

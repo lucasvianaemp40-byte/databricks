@@ -39,6 +39,7 @@ erDiagram
     timestamptz starts_at
     timestamptz ends_at
     timestamp local_starts_at
+    int local_utc_offset_seconds
     text timezone
     timestamptz hold_expires_at
     text idempotency_key
@@ -47,6 +48,7 @@ erDiagram
   occupancies {
     uuid id PK
     uuid tenant_id
+    uuid appointment_item_id
     uuid staff_id
     text kind
     tstzrange during
@@ -56,8 +58,15 @@ erDiagram
 
 Toda tabela de tenant tem `tenant_id`, PK `uuid` (UUIDv7 gerado na aplicação por `newId()`;
 o default do banco é `gen_random_uuid()`, porque o PostgreSQL 16 e 17 não tem `uuidv7()`), FKs
-compostas `(tenant_id, id)` e UNIQUEs começando por `tenant_id`. UUIDv7 é ordenável e
-parcialmente previsível: é identificador, nunca segredo.
+compostas `(tenant_id, id)` e UNIQUEs de negócio começando por `tenant_id`. UUIDv7 é ordenável
+e parcialmente previsível: é identificador, nunca segredo.
+
+A PK `id` é **global**, não `(tenant_id, id)`, para que um id nunca se repita entre salões
+(jobs, logs e caches indexados só pelo id). Consequência: um INSERT com o `id` de uma linha de
+outro tenant recebe 23505 mesmo com a RLS escondendo a linha. Isso não vaza nada porque o id
+nasce sempre no servidor e nunca muda: o cliente nunca manda `id` nem `tenant_id`, e não há
+UPDATE de `id`. O `@salon/db` traduz esse 23505 para `IdentifierConflictError`, que a borda
+responde como 404/409 genérico, nunca "já existe".
 
 ### Planejadas
 
@@ -78,16 +87,16 @@ parcialmente previsível: é identificador, nunca segredo.
 | # | Invariante | Onde é garantida | Teste |
 |---|---|---|---|
 | I1 | Um profissional nunca tem duas ocupações ativas sobrepostas | banco: `EXCLUDE USING gist (tenant_id =, staff_id =, during &&) WHERE (active)` | integração com corrida real; propriedade P5 do core |
-| I2 | A ocupação está ativa se, e só se, o status do agendamento ocupa a agenda | banco: triggers `occupancies_derive_active` e `appointments_sync_occupancies` (o valor enviado pela aplicação é ignorado); core: `occupiesSchedule` | integração |
+| I2 | A ocupação está ativa se, e só se, o status do agendamento ocupa a agenda | banco: triggers `occupancies_derive_active` e `appointments_sync_occupancies` (o valor enviado pela aplicação é ignorado; sem agendamento visível, `active = false`); core: `occupiesSchedule`. O `FOR SHARE` da derivação serializa a ocupação nova com um cancelamento concorrente só em READ COMMITTED, que `withTenant` fixa | integração, inclusive a corrida com o banco em REPEATABLE READ por padrão |
 | I3 | Status só muda pelas transições permitidas | core: `transitionAppointmentStatus`; banco: trigger espelho; teste de paridade sem banco | 81 pares no banco; unit e propriedade no core |
 | I4 | O agendamento nasce só `pending` ou `confirmed` | banco (trigger) e core (`INITIAL_APPOINTMENT_STATUSES`) | integração |
 | I5 | `pending` exige `hold_expires_at`; `confirmed` zera o hold | banco (CHECK + trigger) | integração |
 | I6 | `ends_at > starts_at` e duração ≤ 24 h | banco (CHECK) | integração |
-| I7 | Fuso é IANA válido no tzdata | banco (`is_valid_iana_timezone`) e core (`assertIanaTimeZone`) | unit |
+| I7 | Fuso é IANA válido no tzdata, no formato `Area/Local` sem dígito (nunca offset fixo) | banco (`is_valid_iana_timezone`: recusa `Etc/GMT±N`, nomes POSIX como `Abc/Def3` e `UTC`; use `Etc/UTC`) e core (`assertIanaTimeZone`, mesma regra de formato do banco). Só o tzdata pode divergir: link legado (`US/Eastern`) aceito pelo core é recusado por um PostgreSQL sem `tzdata-legacy`, e o CHECK dá a palavra final | unit; integração; paridade no `pnpm test:db` (todo nome aceito pelo banco passa no core; amostra fixa dos 16 fusos do Brasil, `Etc/UTC` e fusos dos testes do core nos dois lados); propriedade no core (todo nome aceito pelo core tem o formato do CHECK) |
 | I8 | Nada referencia linha de outro tenant | banco (FKs compostas) | RLS |
 | I9 | Telefone único por salão, nunca global | banco (UNIQUE parcial `(tenant_id, phone_e164)`) | integração |
 | I10 | Uma criação por `idempotency_key` no tenant | banco (UNIQUE) → `IdempotencyKeyConflictError` | integração |
-| I11 | Preço, duração e comissão do item são snapshot e não mudam quando o catálogo muda | aplicação (cópia na criação do item) | [planejado] |
+| I11 | Preço, duração, fases, buffers e comissão do item são snapshot e não mudam quando o catálogo muda | aplicação (cópia na criação do item) [planejado]; banco: duração, fases e buffers congelados no item, coerentes entre si (CHECKs `appointment_items_phases_valid` e `appointment_items_duration_coherent`) e imutáveis. Preço e comissão ainda podem mudar por UPDATE (desconto e correção são decisão de produto em aberto) | integração (imutabilidade) |
 | I12 | A auditoria é append-only | banco (triggers bloqueiam `UPDATE`, `DELETE` e `TRUNCATE` até para o dono) | integração |
 | I13 | Cliente anonimizado não tem contato nem consentimento | banco (CHECK) | integração |
 | I14 | As fases somam a duração e têm ao menos uma fase de trabalho | banco (CHECK) e core (`serviceFootprint`) | unit |
@@ -95,6 +104,18 @@ parcialmente previsível: é identificador, nunca segredo.
 | I16 | Dinheiro em centavos inteiros; percentuais em bps de 0 a 10.000 | banco (CHECK) | integração |
 | I17 | Todo UPDATE de agendamento incrementa `version` (lock otimista) | banco (trigger) | integração |
 | I18 | Horário ofertado cabe na jornada, respeita antecedência e horizonte e não colide com ocupação ou folga | core (`computeAvailableSlots`) | propriedades P1 a P15 |
+| I19 | A ocupação pertence ao profissional do item e cabe na janela do item ampliada pelos buffers congelados; um trecho `service` toca a janela visível | banco: FK composta `(tenant_id, appointment_id, appointment_item_id, staff_id)` para o item; trigger `occupancies_guard_within_item` | integração |
+| I20 | No COMMIT, todo agendamento que ocupa a agenda tem itens dentro da janela da visita, e as ocupações `service` ativas de cada item cobrem todas as fases `work` congeladas nele | banco: constraint triggers adiadas `appointments_occupancy_required` e `appointment_items_occupancy_required`. Uma ocupação de 1 minuto num serviço de 1 hora não passa, e a pausa de um serviço multi-etapa fica livre | integração (inclusive a segunda fase `work`, item novo numa visita já confirmada e ocupação `buffer`, que não cobre trabalho) |
+| I21 | Visita e item são imutáveis: unidade, fuso e horário da visita; profissional, horário, duração, fases e buffers do item. Item com ocupação ativa não é apagado, e a aplicação não apaga nem move ocupação (só faz INSERT e UPDATE de `active`). Remarcar = novo agendamento | banco: triggers `appointments_guard_status` (`appointments_schedule_immutable`) e `appointment_items_guard_schedule`; GRANTs de coluna | integração |
+| I22 | Hora de parede, offset e instante são coerentes, e o fuso do agendamento é o da unidade. O offset (`local_utc_offset_seconds`) distingue a hora repetida do fim do horário de verão | banco: CHECKs `appointments_local_time_coherent` (aritmética pura, sem tzdata) e `appointments_utc_offset_range` (±18 h); trigger `appointments_guard_location_timezone` no INSERT | integração (01:30 de 2026-11-01 em Nova York com −04:00 e −05:00) |
+| I23 | Instantes de transição (`confirmed_at` e afins), `created_at` e `updated_at` são do banco; o hold só muda enquanto o agendamento segue `pending` | banco: trigger `appointments_guard_status` em todo INSERT e UPDATE (os valores enviados são ignorados) | integração |
+| I24 | Horários de agenda têm precisão de milissegundo | banco: CHECK `<tabela>_instant_precision` em agendamento, item, ocupação e bloqueio (o `Date` do driver descarta microssegundos, e um fim arredondado para dentro faria o motor oferecer horário que o `EXCLUDE` recusa) | integração |
+| I25 | Jornada em minuto cheio | banco: CHECK `working_hours_whole_minutes`; o adaptador para o `WorkShift` do core [planejado] converte `HH:MM:SS` em `HH:MM` de forma estrita e recusa qualquer outro formato | integração |
+
+**Não garantido no banco:** folga (`time_off`) contra ocupação. É decisão provisória de
+domínio: uma folga registrada sobre agendamentos existentes não os cancela. A transação de
+reserva revalida as folgas (seção 5, passo 3), e o painel deve alertar a recepção sobre
+agendamentos dentro de uma folga nova [planejado].
 
 ## 3. Máquina de estados do agendamento
 
@@ -140,8 +161,10 @@ stateDiagram-v2
 - Toda transição grava `appointment_events` com o ator, via trigger [fundação].
 - **Remarcar** cria outro agendamento com `rescheduled_from_id`, na mesma transação que cancela o
   anterior. Se o novo horário colidir, nada muda.
-- Mover o horário dentro do mesmo status é um UPDATE das ocupações, também protegido pelo
-  `EXCLUDE` e pelo lock otimista (`version`).
+- **Mover o horário também é remarcar.** Unidade, fuso e horário da visita, e profissional,
+  horário, duração, fases e buffers do item, são imutáveis no banco (I21), e a aplicação não
+  apaga nem move ocupação. Arrastar na agenda da recepção cancela o original e cria outro, na
+  mesma transação, com o lock otimista (`version`) no original.
 - "**Confirmou presença**" (o cliente tocou "Confirmo" no lembrete) é **atributo**, não status.
   "Confirmado" pelo salão e "confirmou presença" são coisas diferentes, e misturar as duas
   confunde os relatórios.
@@ -156,10 +179,10 @@ horário de verão, estão no [README do core](../../packages/scheduling-core/RE
 | Entrada | Origem |
 |---|---|
 | fuso da unidade | `locations.timezone` |
-| intervalo de datas locais | até 366 dias por consulta |
-| jornada semanal (`weeklySchedule`) | `working_hours` |
+| intervalo de datas locais | até 366 datas e no máximo `MAX_CANDIDATE_STARTS` = 20.160 inícios candidatos por consulta (datas × ⌈1440 / granularidade⌉: 70 dias na grade de 5 min, 210 na de 15 min, 366 na de 30 min). A página pública limita a 31 dias no servidor [planejado] |
+| jornada semanal (`weeklySchedule`) | `working_hours` do profissional **na unidade consultada** (`WHERE location_id = :locationId`). O motor une turnos encostados: com 09–12 na unidade A e 12–18 na B, juntar as duas faria um atendimento de 60 min começar às 11:30 numa unidade e terminar na outra |
 | serviço com fases e buffers | `services.phases`, `buffer_before_min`, `buffer_after_min` e o override de `staff_services` |
-| ocupações ativas (`busy`) | `occupancies` com `active = true` |
+| ocupações ativas (`busy`) | `occupancies` com `active = true` do profissional **em todas as unidades** (ele não está em dois lugares ao mesmo tempo) |
 | folgas e bloqueios (`timeOff`) | `time_off` |
 | granularidade | `slot_interval_min` |
 | antecedência mínima | `min_notice_min` |
@@ -173,8 +196,10 @@ horário de verão, estão no [README do core](../../packages/scheduling-core/RE
 1. O atendimento visível (todas as fases, inclusive pausas) cabe inteiro num turno da jornada.
 2. **Buffers** ocupam o profissional e nunca colidem com ocupação ou folga, mas podem passar do
    limite do turno (preparo antes de abrir, limpeza depois de fechar).
-3. Na **pausa**, o profissional fica livre: outro cliente cabe nela. Uma coloração gera duas
-   ocupações do profissional, aplicação e finalização, com a pausa livre entre elas.
+3. Na **pausa**, o profissional fica livre: outro cliente cabe nela. Numa coloração, as fases
+   de trabalho (aplicação e finalização) viram duas ocupações `kind = 'service'`, com a pausa
+   livre entre elas. Os buffers, se houver, viram ocupações próprias `kind = 'buffer'`. As
+   linhas saem de `staffOccupancySegments(start, service)` (seção 5, passo 4).
 4. Inícios na **grade local** (`00:00 + k × granularidade` no relógio da unidade).
 5. `agora + antecedência ≤ início ≤ agora + horizonte`, com "agora" lido **uma vez** do `Clock`.
 6. Intervalos semiabertos: atendimentos encostados não colidem.
@@ -207,16 +232,32 @@ withTenant(db, tenantId, async (tx) => {
      não pode usar now(), então hold vencido continua "ativo" até ser expirado)
   3. revalida com dados lidos NESTA transação: jornada, folgas, antecedência,
      serviço ativo e agendável, cliente não bloqueado
-  4. INSERT appointments (pending ou confirmed) + appointment_items + occupancies
-     (uma ocupação por fase de trabalho e por buffer)
+  4. INSERT appointments (pending ou confirmed, com hora local, offset e fuso da unidade)
+     + appointment_items (duração, fases e buffers congelados) + occupancies a partir de
+     staffOccupancySegments(start, service): uma linha por buffer (kind 'buffer') e uma por
+     fase de trabalho (kind 'service'), sem unir trechos encostados
   5. enfileira notificações e lembretes na mesma transação (pg-boss)
 }, { actor: { type: 'customer' | 'staff', id } })
 ```
 
+- As linhas de ocupação **não** vêm de `staffBusyIntervals`, que une buffer e trabalho num
+  trecho só (é o que o motor de disponibilidade testa). A união das linhas de
+  `staffOccupancySegments` é igual a `staffBusyIntervals`, e `OCCUPANCY_KINDS` do core espelha
+  o CHECK `occupancies_kind_valid` (paridade conferida sem banco em
+  `packages/db/src/occupancy-kinds-sync.test.ts` e no catálogo do PostgreSQL em
+  `packages/db/test/integration/constraints.int.test.ts`) [fundação].
+- No COMMIT, o banco confere que as ocupações `service` cobrem as fases de trabalho de cada
+  item e que os itens cabem na visita (I20).
+- A transação roda em READ COMMITTED (fixo no `withTenant`): o `FOR SHARE` que deriva
+  `active` depende disso para serializar a reserva com um cancelamento concorrente.
+- O `tx` só vale dentro do callback: nada de `after()`, `setTimeout` ou builder devolvido para
+  executar depois, e `Promise.allSettled` em vez de `Promise.all` com ramos que podem falhar.
+
 - `23P01` vira `SlotUnavailableError`, que a borda devolve como **HTTP 409**
   `{ code: "SLOT_TAKEN", alternatives: [3 próximos horários] }`. Não retentar às cegas.
-- **Lock otimista** na agenda da recepção (arrastar e soltar): `UPDATE ... WHERE id = $1 AND
-  version = $2`. Zero linhas significa "alguém alterou, recarregue".
+- **Lock otimista** na agenda da recepção (mudança de status, inclusive o cancelamento do
+  original ao remarcar por arrastar e soltar): `UPDATE ... WHERE id = $1 AND version = $2`.
+  Zero linhas significa "alguém alterou, recarregue".
 - `ON CONFLICT` não serve com `EXCLUDE` (só `DO NOTHING`), por isso o padrão é capturar `23P01`.
 - `UNIQUE (..., WITHOUT OVERLAPS)` do PostgreSQL 18 não aceita o `WHERE (active)` e não existe
   no 16, por isso o `EXCLUDE` continua.

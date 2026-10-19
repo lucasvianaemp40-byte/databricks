@@ -14,7 +14,11 @@
 -- (ALTER ROLE app_user PASSWORD ... pelo provedor/IaC) e nunca é versionada.
 --
 -- Idempotente: papéis já existentes (outro banco do mesmo cluster, criados pelo provedor)
--- são reaproveitados, mas seus atributos são verificados e corrigidos (falha se não puder).
+-- são reaproveitados, mas seus atributos são verificados e corrigidos (falha se não puder):
+--   - nenhum dos três fica SUPERUSER, BYPASSRLS, CREATEDB, CREATEROLE ou REPLICATION;
+--   - app_migrator volta a NOLOGIN, NOINHERIT e sem senha (dono de tudo não pode logar:
+--     logado, desligaria a RLS e trocaria a função de invariantes);
+--   - app_migrator membro de algum papel aborta a migração (herdaria privilégios alheios).
 -- =============================================================================
 
 -- Operador = para uuid/smallint em índices GiST (EXCLUDE anti-sobreposição). É "trusted"
@@ -39,7 +43,8 @@ BEGIN
   END LOOP;
 
   -- Papel reaproveitado com atributo perigoso: corrige. Sem privilégio para corrigir, o
-  -- ALTER falha e a migração inteira é desfeita (falha fechada).
+  -- ALTER falha e a migração inteira é desfeita (falha fechada). Só altera quando precisa:
+  -- um admin não superusuário não pode nem citar SUPERUSER/BYPASSRLS num ALTER ROLE.
   FOREACH role_name IN ARRAY ARRAY['app_migrator', 'app_user', 'app_worker'] LOOP
     IF EXISTS (
       SELECT FROM pg_catalog.pg_roles
@@ -51,6 +56,23 @@ BEGIN
         role_name);
     END IF;
   END LOOP;
+
+  -- O dono só é assumido por SET ROLE no deploy. Reaproveitado com LOGIN ou INHERIT (ex.:
+  -- criado pelo console do provedor), volta a NOLOGIN/NOINHERIT e perde a senha. Com
+  -- NOLOGIN, uma senha antiga não serve para nada; ela é apagada junto na correção.
+  IF EXISTS (
+    SELECT FROM pg_catalog.pg_roles
+     WHERE rolname = 'app_migrator' AND (rolcanlogin OR rolinherit)
+  ) THEN
+    ALTER ROLE app_migrator NOLOGIN NOINHERIT PASSWORD NULL;
+  END IF;
+
+  IF EXISTS (
+    SELECT FROM pg_catalog.pg_auth_members m
+     WHERE m.member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = 'app_migrator')
+  ) THEN
+    RAISE EXCEPTION 'app_migrator é membro de outro papel: revogue antes de migrar (o dono não herda nada)';
+  END IF;
 END
 $$;
 --> statement-breakpoint
@@ -61,6 +83,17 @@ BEGIN
   EXECUTE format('GRANT CONNECT, CREATE, TEMPORARY ON DATABASE %I TO app_migrator',
                  current_database());
   EXECUTE format('GRANT CONNECT ON DATABASE %I TO app_user, app_worker', current_database());
+END
+$$;
+--> statement-breakpoint
+-- Ninguém cria objetos no schema public (padrão desde o PG15; bancos antigos ou criados por
+-- provedor podem ter o CREATE de PUBLIC). Sem ser dono do schema, o REVOKE só avisa, e a
+-- função de invariantes recusa o deploy se um papel de runtime ainda puder criar ali.
+DO $$
+BEGIN
+  IF to_regnamespace('public') IS NOT NULL THEN
+    REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+  END IF;
 END
 $$;
 --> statement-breakpoint

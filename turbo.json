@@ -3,7 +3,8 @@
   "ui": "stream",
   "globalDependencies": [
     "tsconfig.base.json",
-    "eslint.base.mjs"
+    "eslint.base.mjs",
+    "test-support/**"
   ],
   "globalEnv": [
     "CI",

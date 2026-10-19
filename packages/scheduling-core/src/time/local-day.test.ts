@@ -66,8 +66,10 @@ describe('wallTimeToInstant', () => {
     );
   });
 
-  it('deve aceitar UTC e fusos com offset fracionário', () => {
-    expect(utc(wallTimeToInstant(date('2026-11-03'), '09:00', 'UTC'))).toBe('2026-11-03T09:00:00Z');
+  it('deve aceitar Etc/UTC e fusos com offset fracionário', () => {
+    expect(utc(wallTimeToInstant(date('2026-11-03'), '09:00', 'Etc/UTC'))).toBe(
+      '2026-11-03T09:00:00Z',
+    );
     expect(utc(wallTimeToInstant(date('2026-11-03'), '09:00', 'Asia/Kathmandu'))).toBe(
       '2026-11-03T03:15:00Z',
     );
@@ -98,6 +100,26 @@ describe('localDayFrame', () => {
     expect(fall.endMs - fall.startMs).toBe(25 * 3_600_000);
   });
 
+  it('deve manter no quadro o trecho em que o relógio volta para a véspera (St. John’s, 2010-11-07)', () => {
+    // 00:01 (-02:30) voltou para 23:01 do dia 06 (-03:30). O quadro vai do primeiro instante
+    // do dia 07 ao primeiro do dia 08; o trecho de -03:30 começa marcando a véspera.
+    const frame = localDayFrame(date('2010-11-07'), 'America/St_Johns');
+    expect(
+      frame.segments.map((s) => ({
+        start: Temporal.Instant.fromEpochMilliseconds(s.startMs).toString(),
+        end: Temporal.Instant.fromEpochMilliseconds(s.endMs).toString(),
+        offset: s.offset,
+      })),
+    ).toEqual([
+      { start: '2010-11-07T02:30:00Z', end: '2010-11-07T02:31:00Z', offset: '-02:30' },
+      { start: '2010-11-07T02:31:00Z', end: '2010-11-08T03:30:00Z', offset: '-03:30' },
+    ]);
+    const secondStart = Temporal.Instant.fromEpochMilliseconds(frame.segments[1]?.startMs ?? 0);
+    expect(secondStart.toZonedDateTimeISO('America/St_Johns').toPlainDateTime().toString()).toBe(
+      '2010-11-06T23:01:00',
+    );
+  });
+
   it('não deve ter trechos num dia local que não existiu', () => {
     const frame = localDayFrame(date('2011-12-30'), 'Pacific/Apia');
     expect(frame.segments).toEqual([]);
@@ -105,20 +127,105 @@ describe('localDayFrame', () => {
   });
 });
 
+// Espelho de app_private.is_valid_iana_timezone (packages/db/drizzle/0001_private_functions.sql),
+// a fonte de verdade: "Área/Local" sem dígito, até 64 caracteres e conhecido pelo tzdata. O
+// teste de paridade do @salon/db (constraints.int.test.ts) prova que todo nome aceito pelo
+// banco passa aqui; estes casos são os mesmos que o banco aceita e recusa.
 describe('assertIanaTimeZone', () => {
-  it('deve aceitar identificadores IANA e UTC', () => {
-    expect(() => assertIanaTimeZone('America/Sao_Paulo')).not.toThrow();
-    expect(() => assertIanaTimeZone('UTC')).not.toThrow();
+  it.each([
+    'America/Sao_Paulo',
+    'America/Manaus',
+    'America/Noronha',
+    'America/Rio_Branco',
+    'Etc/UTC',
+    'America/Port-au-Prince',
+    'America/Argentina/Buenos_Aires',
+    'Etc/GMT',
+    'Pacific/Kiritimati',
+  ])('deve aceitar %j', (timeZone) => {
+    expect(() => assertIanaTimeZone(timeZone)).not.toThrow();
   });
 
-  it.each(['-03:00', '+00:00', 'Brasil/Brasilia', 'UTC-3', ''])('deve rejeitar %j', (timeZone) => {
+  it.each([
+    // Offset fixo ou abreviação: não acompanham o tzdata.
+    '-03:00',
+    '+00:00',
+    'UTC-3',
+    'BRT',
+    '',
+    // Sem "/": o banco recusa (use 'Etc/UTC').
+    'UTC',
+    'GMT',
+    'Zulu',
+    'EST5EDT',
+    // Offset fixo do tzdata (Etc/GMT±N, com o sinal invertido): proibido de propósito.
+    'Etc/GMT+3',
+    'Etc/GMT-3',
+    'Etc/GMT+0',
+    'Etc/GMT0',
+    'Etc/GMT-14',
+    // Com dígito: fora do tzdata, o PostgreSQL leria como especificação POSIX.
+    'Abc/Def3',
+    'Brasilia/Horario+3',
+    'America/Sao_Paulo3',
+    'America/Sao_Paulo3BRST',
+    'America/Fake-3',
+    'Mars/Base+03',
+    'SystemV/AST4',
+    // Forma inválida.
+    'America/Sao_Paulo; DROP TABLE x',
+    'America/Sao_Paulo/',
+    '/America/Sao_Paulo',
+    'America//Sao_Paulo',
+    'America/Sao Paulo',
+    ' America/Sao_Paulo',
+    'America/Sao_Paulo\n',
+    'America_/Sao_Paulo',
+    // Fora do tzdata.
+    'Brasil/Brasilia',
+    'America/Atlantida',
+    'Mars/Olympus_Mons',
+    'Etc/Unknown',
+  ])('deve rejeitar %j, como o banco', (timeZone) => {
     expect(() => assertIanaTimeZone(timeZone)).toThrow(SchedulingInputError);
+  });
+
+  it('deve rejeitar nome com mais de 64 caracteres sem ecoá-lo no erro', () => {
+    const tooLong = `America/${'X'.repeat(57)}`;
+    expect(tooLong).toHaveLength(65);
+    let error: unknown;
+    try {
+      assertIanaTimeZone(tooLong, 'location.timeZone');
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(SchedulingInputError);
+    expect(error).toMatchObject({ field: 'location.timeZone' });
+    expect((error as Error).message).not.toContain(tooLong);
+  });
+
+  // O formato não pode recusar nome real: se recusasse um nome que o banco aceita, um fuso já
+  // gravado faria o core lançar erro. A lista do ICU traz também links legados
+  // ('Asia/Calcutta', 'America/Buenos_Aires') que um PostgreSQL sem tzdata-legacy recusa: o
+  // core os aceita e o CHECK do banco decide (por isso a UI oferece lista fixa de nomes).
+  it('o formato não deve recusar nenhum fuso do runtime sem dígito (Intl.supportedValuesOf)', () => {
+    const canonical = Intl.supportedValuesOf('timeZone');
+    expect(canonical.length).toBeGreaterThan(300);
+    const rejected = canonical.filter((timeZone) => {
+      try {
+        assertIanaTimeZone(timeZone);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(rejected).toEqual(canonical.filter((timeZone) => /\d/.test(timeZone)));
   });
 
   it('deve rejeitar calendário que não é ISO 8601', () => {
     const gregorian = Temporal.PlainDate.from({ year: 2026, month: 11, day: 3 }).withCalendar(
       'gregory',
     );
-    expect(() => wallTimeToInstant(gregorian, '09:00', 'UTC')).toThrow(SchedulingInputError);
+    expect(() => wallTimeToInstant(gregorian, '09:00', 'Etc/UTC')).toThrow(SchedulingInputError);
   });
 });

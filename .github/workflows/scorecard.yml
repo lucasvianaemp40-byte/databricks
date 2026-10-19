@@ -1,6 +1,6 @@
 # OpenSSF Scorecard: nota de práticas de segurança do repositório (pins, permissões, revisão,
-# branch protection...). Repo privado exige GitHub Code Security: só roda com
-# GHAS_ENABLED = 'true'.
+# branch protection...). Ligado por padrão; repositório privado SEM GitHub Code Security define
+# GHAS_ENABLED = 'false' (o upload do SARIF exige code scanning).
 #
 # Com publish_results (só repo público), a API do Scorecard rejeita o run se o workflow tiver
 # env/defaults no topo, permissão de escrita no topo, ou se o job tiver env, defaults,
@@ -25,7 +25,7 @@ concurrency:
 jobs:
   analysis:
     name: Scorecard
-    if: ${{ vars.GHAS_ENABLED == 'true' }}
+    if: ${{ vars.GHAS_ENABLED != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

@@ -46,8 +46,12 @@ describe('regras de lint do domínio puro', () => {
     [
       'Date.parse (fuso da máquina)',
       "export const t = Date.parse('2026-11-03T09:00');",
-      ['no-restricted-syntax'],
+      ['no-restricted-syntax', 'no-restricted-properties'],
     ],
+    // Redeclarar no-restricted-properties no pacote SUBSTITUI a regra da base (eslint.base.mjs,
+    // bloco salon/fuso-da-maquina): sem a composição, referência e desestruturação passariam.
+    ['referência a Date.parse', 'export const p = Date.parse;', ['no-restricted-properties']],
+    ['Date.parse desestruturado', 'export const { parse } = Date;', ['no-restricted-properties']],
     [
       'Math.random()',
       'export const r = Math.random();',
@@ -99,5 +103,44 @@ describe('regras de lint do domínio puro', () => {
 
   it('não deve aplicar as regras de domínio ao suporte de testes em test/', async () => {
     expect(await domainRulesFiredFor('export const t = Date.now();', 'test/probe.ts')).toEqual([]);
+  });
+});
+
+describe('regra contra dica de exclusão de cobertura', () => {
+  // Montada por partes: test/test-hygiene.test.ts varre este arquivo também.
+  const hint = (style: 'block' | 'line' | 'jsdoc', tool: string, rest: string): string => {
+    const text = `${tool} ${['ign', 'ore'].join('')} ${rest}`;
+    const comment =
+      style === 'line'
+        ? `// ${text}`
+        : style === 'jsdoc'
+          ? `/** antes ${text} */`
+          : `/* ${text} */`;
+    return `${comment}\nexport const x = 1;\n`;
+  };
+
+  async function rulesFiredFor(code: string, relativePath: string): Promise<string[]> {
+    const [result] = await eslint.lintText(code, {
+      filePath: path.join(packageDir, relativePath),
+    });
+    return (result?.messages ?? []).flatMap((message) => message.ruleId ?? []);
+  }
+
+  it.each([
+    ['block', 'v8', 'start'],
+    ['block', 'v8', 'next -- @preserve'],
+    ['line', 'c8', 'next'],
+    ['block', 'istanbul', 'else'],
+    ['block', 'node:coverage', 'next'],
+    ['jsdoc', 'v8', 'stop'],
+  ] as const)('deve barrar comentário %s com %s %s em src/ e test/', async (style, tool, rest) => {
+    for (const file of ['src/lint-probe.ts', 'test/probe.ts']) {
+      expect(await rulesFiredFor(hint(style, tool, rest), file)).toContain('no-warning-comments');
+    }
+  });
+
+  it('não deve barrar comentário comum sobre cobertura', async () => {
+    const code = '// cobertura v8 com piso por arquivo\nexport const x = 1;\n';
+    expect(await rulesFiredFor(code, 'src/lint-probe.ts')).not.toContain('no-warning-comments');
   });
 });

@@ -122,11 +122,46 @@ export class IdempotencyKeyConflictError extends DatabaseConstraintError {
   }
 }
 
+/**
+ * 23505 na PK `id` (`<tabela>_pkey`). A PK é GLOBAL (não começa por `tenant_id`): um id que
+ * já existe em OUTRO tenant também colide, mesmo invisível pela RLS. Nunca responda "já
+ * existe" (seria um oráculo de existência entre tenants): trate como erro genérico (HTTP 404
+ * ou 409 sem detalhe). Ids são gerados no servidor (`newId()`); não aceite id vindo do cliente
+ * em INSERT/upsert nem UPDATE de `id`.
+ */
+export class IdentifierConflictError extends DatabaseConstraintError {
+  constructor(constraint: string | undefined, cause: unknown) {
+    super('Operação recusada: identificador inválido.', {
+      code: 'IDENTIFIER_CONFLICT',
+      sqlState: PG_ERROR.uniqueViolation,
+      constraint,
+      cause,
+    });
+  }
+}
+
+/**
+ * Uma consulta usou o `tx` de `withTenant` depois que a transação terminou (builder devolvido
+ * dentro de um objeto, ramo de `Promise.all` que continuou depois da rejeição, `after()` ou
+ * fire-and-forget com o `tx`). A consulta NÃO chega ao banco: sem esta guarda ela rodaria na
+ * conexão já devolvida ao pool, dentro da transação de outra requisição (outro tenant).
+ * Indica bug de programação: corrija o chamador (aguarde todos os ramos dentro do callback).
+ */
+export class TransactionClosedError extends Error {
+  readonly code = 'TRANSACTION_CLOSED';
+
+  constructor() {
+    super('withTenant: transação encerrada; o tx só pode ser usado enquanto o callback executa.');
+    this.name = new.target.name;
+  }
+}
+
 const STATUS_TRANSITION_CONSTRAINTS: ReadonlySet<string> = new Set([
   'appointments_status_transition',
   'appointments_initial_status',
 ]);
 const IDEMPOTENCY_CONSTRAINT = 'appointments_tenant_idempotency_key_key';
+const PRIMARY_KEY_SUFFIX = '_pkey';
 
 /**
  * Converte o erro do banco no erro de domínio correspondente; qualquer outro erro volta
@@ -151,8 +186,11 @@ export function mapDatabaseError(error: unknown): unknown {
         ? new InvalidStatusTransitionError(pgError.constraint, error)
         : error;
     case PG_ERROR.uniqueViolation:
-      return pgError.constraint === IDEMPOTENCY_CONSTRAINT
-        ? new IdempotencyKeyConflictError(pgError.constraint, error)
+      if (pgError.constraint === IDEMPOTENCY_CONSTRAINT) {
+        return new IdempotencyKeyConflictError(pgError.constraint, error);
+      }
+      return pgError.constraint?.endsWith(PRIMARY_KEY_SUFFIX) === true
+        ? new IdentifierConflictError(pgError.constraint, error)
         : error;
     default:
       return error;

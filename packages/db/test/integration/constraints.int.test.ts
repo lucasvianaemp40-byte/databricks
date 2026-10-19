@@ -1,11 +1,17 @@
-import type { ServicePhase } from '@salon/scheduling-core';
-import { eq } from 'drizzle-orm';
+import { assertIanaTimeZone, OCCUPANCY_KINDS, type ServicePhase } from '@salon/scheduling-core';
+import { asc, eq, inArray } from 'drizzle-orm';
+import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../src/client';
-import { IdempotencyKeyConflictError, PG_ERROR } from '../../src/errors';
+import { findPostgresError, IdempotencyKeyConflictError, PG_ERROR } from '../../src/errors';
 import { appointments, customers, locations, services, workingHours } from '../../src/schema';
 import { withTenant } from '../../src/tenant';
-import { captureSqlState, connectAsAppUser } from '../helpers/connections';
+import {
+  captureDatabaseError,
+  captureSqlState,
+  connectAsAdmin,
+  connectAsAppUser,
+} from '../helpers/connections';
 import {
   bookAppointment,
   createTenantFixture,
@@ -39,7 +45,10 @@ describe('integridade do schema (CHECK, UNIQUE, EXCLUDE)', () => {
       'America/Noronha',
       'America/Rio_Branco',
       'Etc/UTC',
+      'America/Port-au-Prince',
+      'America/Argentina/Buenos_Aires',
     ])('aceita %s', async (timezone) => {
+      expect(() => assertIanaTimeZone(timezone)).not.toThrow();
       await expect(
         inTenant((tx) =>
           tx.insert(locations).values({
@@ -59,7 +68,27 @@ describe('integridade do schema (CHECK, UNIQUE, EXCLUDE)', () => {
       'America/Atlantida',
       '',
       'America/Sao_Paulo; DROP TABLE x',
+      // Fora do tzdata, o PostgreSQL leria estes nomes como especificação POSIX (offset fixo,
+      // sem horário de verão do tzdata) e o core os recusaria.
+      'Abc/Def3',
+      'Brasilia/Horario+3',
+      'America/Sao_Paulo3',
+      'America/Sao_Paulo3BRST',
+      'America/Fake-3',
+      'Mars/Base+03',
+      // Existem no tzdata, mas são offset fixo (proibido pela regra de fuso do projeto).
+      'Etc/GMT+3',
+      'Etc/GMT-14',
+      'Etc/GMT0',
+      // Sem "Área/": use 'Etc/UTC'.
+      'UTC',
+      'GMT',
+      'America/Sao_Paulo/',
+      // Acima do teto de 64 caracteres.
+      `America/${'A'.repeat(57)}`,
     ])('recusa %j', async (timezone) => {
+      // O core recusa o mesmo nome antes de chegar ao banco.
+      expect(() => assertIanaTimeZone(timezone)).toThrow();
       expect(
         await captureSqlState(
           inTenant((tx) =>
@@ -68,6 +97,107 @@ describe('integridade do schema (CHECK, UNIQUE, EXCLUDE)', () => {
         ),
       ).toBe(PG_ERROR.checkViolation);
     });
+  });
+
+  it('paridade com o core: todo fuso que o banco aceita o assertIanaTimeZone também aceita', async () => {
+    const admin = connectAsAdmin(1);
+    try {
+      const { rows } = await admin.query<{ name: string }>(
+        `SELECT name FROM pg_catalog.pg_timezone_names
+          WHERE app_private.is_valid_iana_timezone(name) ORDER BY name`,
+      );
+      expect(rows.length).toBeGreaterThan(300);
+      const rejectedByCore = rows
+        .map((row) => row.name)
+        .filter((name) => {
+          try {
+            assertIanaTimeZone(name);
+            return false;
+          } catch {
+            return true;
+          }
+        });
+      expect(rejectedByCore).toEqual([]);
+    } finally {
+      await admin.end();
+    }
+  });
+
+  it('paridade com o core: fusos reais (os 16 do Brasil e os dos testes do core) passam nos dois lados', async () => {
+    // Amostra fixa de nomes canônicos. Intl.supportedValuesOf('timeZone') NÃO serve: o ICU lista
+    // links legados (US/Eastern, Brazil/East...) que um PostgreSQL sem tzdata-legacy recusa.
+    const sample = [
+      'America/Noronha',
+      'America/Belem',
+      'America/Fortaleza',
+      'America/Recife',
+      'America/Araguaina',
+      'America/Maceio',
+      'America/Bahia',
+      'America/Sao_Paulo',
+      'America/Campo_Grande',
+      'America/Cuiaba',
+      'America/Santarem',
+      'America/Porto_Velho',
+      'America/Boa_Vista',
+      'America/Manaus',
+      'America/Eirunepe',
+      'America/Rio_Branco',
+      'Etc/UTC',
+      'America/New_York',
+      'America/Santiago',
+      'Europe/Lisbon',
+      'Europe/London',
+      'Australia/Lord_Howe',
+      'Pacific/Chatham',
+      'Asia/Kathmandu',
+      'Pacific/Kiritimati',
+      'Pacific/Apia',
+      'America/St_Johns',
+      'America/Goose_Bay',
+      'America/Moncton',
+      'Antarctica/Casey',
+    ];
+    const rejectedByCore = sample.filter((name) => {
+      try {
+        assertIanaTimeZone(name);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(rejectedByCore).toEqual([]);
+    const admin = connectAsAdmin(1);
+    try {
+      const { rows } = await admin.query<{ name: string; valid: boolean }>(
+        `SELECT name, app_private.is_valid_iana_timezone(name) AS valid
+           FROM unnest($1::text[]) AS name`,
+        [sample],
+      );
+      expect(rows).toHaveLength(sample.length);
+      expect(rows.filter((row) => !row.valid).map((row) => row.name)).toEqual([]);
+    } finally {
+      await admin.end();
+    }
+  });
+
+  it('paridade com o core: o banco aceita em occupancies.kind exatamente OCCUPANCY_KINDS', async () => {
+    // Catálogo do banco migrado, não o texto da migração: vale o que está aplicado. Todo CHECK
+    // de occupancies que cite `kind` entra, para que nenhum outro restrinja os tipos em silêncio.
+    const { rows } = await db.$client.query<{ name: string; definition: string }>(
+      `SELECT c.conname AS name, pg_catalog.pg_get_constraintdef(c.oid) AS definition
+         FROM pg_catalog.pg_constraint c
+        WHERE c.conrelid = 'app.occupancies'::regclass
+          AND c.contype = 'c'
+          AND c.convalidated
+          AND pg_catalog.pg_get_constraintdef(c.oid) ~ '\\mkind\\M'`,
+    );
+    expect(rows.map((row) => row.name)).toEqual(['occupancies_kind_valid']);
+    const definition = first(rows).definition;
+    // O PostgreSQL normaliza `kind IN (...)` para `kind = ANY (ARRAY['service'::text, ...])`.
+    expect(definition).toMatch(/^CHECK \(\(kind = ANY \(ARRAY\[[^\]]*\]\)\)\)$/);
+    const kinds = [...definition.matchAll(/'([^']*)'::text/g)].map(([, kind]) => kind ?? '');
+    expect(kinds.sort()).toEqual([...OCCUPANCY_KINDS].sort());
   });
 
   describe('fases do serviço', () => {
@@ -156,8 +286,15 @@ describe('integridade do schema (CHECK, UNIQUE, EXCLUDE)', () => {
       ['dia 0', 0, '09:00', '10:00'],
       ['dia 8', 8, '09:00', '10:00'],
       ['fim antes do início', 5, '10:00', '09:00'],
+      // O core só representa 'HH:MM': segundos derrubariam ou deslocariam a agenda.
+      ['início com segundos', 1, '09:00:30', '18:00'],
+      ['fim com fração de segundo', 1, '09:00', '18:00:00.5'],
     ])('recusa %s', async (_label, weekday, start, end) => {
       expect(await captureSqlState(insertHours(weekday, start, end))).toBe(PG_ERROR.checkViolation);
+    });
+
+    it('aceita turno até 24:00', async () => {
+      await expect(insertHours(2, '18:00', '24:00')).resolves.toBeDefined();
     });
   });
 
@@ -242,6 +379,41 @@ describe('integridade do schema (CHECK, UNIQUE, EXCLUDE)', () => {
     });
   });
 
+  describe('instantes com precisão de milissegundo (o Date do driver não carrega microssegundos)', () => {
+    it.each(['appointments', 'appointment_items', 'occupancies', 'time_off'])(
+      '%s recusa microssegundos',
+      async (table) => {
+        const admin = connectAsAdmin(1);
+        const client = await admin.connect();
+        try {
+          await client.query('BEGIN');
+          // Modo réplica desliga os triggers: isola o CHECK de precisão das demais regras.
+          await client.query('SET LOCAL session_replication_role = replica');
+          const error = await client
+            .query(
+              `UPDATE app.${pg.escapeIdentifier(table)}
+                  SET starts_at = starts_at + interval '1 microsecond',
+                      ends_at = ends_at + interval '1 microsecond'
+                WHERE tenant_id = $1`,
+              [tenant.tenantId],
+            )
+            .then(
+              () => undefined,
+              (failure: unknown) => failure,
+            );
+          expect(findPostgresError(error)).toMatchObject({
+            code: PG_ERROR.checkViolation,
+            constraint: `${table}_instant_precision`,
+          });
+        } finally {
+          await client.query('ROLLBACK');
+          client.release();
+          await admin.end();
+        }
+      },
+    );
+  });
+
   describe('agendamentos', () => {
     it('chave de idempotência repetida no mesmo tenant => IdempotencyKeyConflictError', async () => {
       const idempotencyKey = randomIdempotencyKey();
@@ -271,6 +443,76 @@ describe('integridade do schema (CHECK, UNIQUE, EXCLUDE)', () => {
       ).resolves.toBeDefined();
     });
 
+    it('hora repetida (fim do horário de verão): as duas ocorrências ficam distintas pelo offset', async () => {
+      const newYork = first(
+        await inTenant((tx) =>
+          tx
+            .insert(locations)
+            .values({ name: 'Nova York', slug: 'nova-york', timezone: 'America/New_York' })
+            .returning({ id: locations.id }),
+        ),
+      );
+      const location = { id: newYork.id, timezone: 'America/New_York' };
+      // 2026-11-01: 01:30 acontece duas vezes em Nova York (EDT -04:00, depois EST -05:00).
+      const occurrences = [new Date('2026-11-01T05:30:00Z'), new Date('2026-11-01T06:30:00Z')];
+      const ids: string[] = [];
+      for (const startsAt of occurrences) {
+        const booked = await inTenant((tx) =>
+          bookAppointment(tx, tenant, {
+            staffId: tenant.staffIds[0],
+            startsAt,
+            endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+            location,
+          }),
+        );
+        ids.push(booked.appointmentId);
+      }
+      const rows = await inTenant((tx) =>
+        tx
+          .select({
+            startsAt: appointments.startsAt,
+            local: appointments.localStartsAt,
+            offset: appointments.localUtcOffsetSeconds,
+          })
+          .from(appointments)
+          .where(inArray(appointments.id, ids))
+          .orderBy(asc(appointments.startsAt)),
+      );
+      expect(rows).toEqual([
+        { startsAt: occurrences[0], local: '2026-11-01 01:30:00', offset: -4 * 60 * 60 },
+        { startsAt: occurrences[1], local: '2026-11-01 01:30:00', offset: -5 * 60 * 60 },
+      ]);
+      // Hora de parede + offset reconstroem o instante sem consultar o tzdata.
+      for (const row of rows) {
+        const wallAsUtc = new Date(`${row.local.replace(' ', 'T')}Z`).getTime();
+        expect(wallAsUtc - row.offset * 1000).toBe(row.startsAt.getTime());
+      }
+    });
+
+    it('hora de parede, offset e instante precisam ser coerentes; o fuso é o da unidade', async () => {
+      const request = {
+        staffId: tenant.staffIds[0],
+        startsAt: new Date('2027-03-04T13:00:00Z'),
+        endsAt: new Date('2027-03-04T14:00:00Z'),
+      };
+      const attempt = (appointment: Partial<typeof appointments.$inferInsert>) =>
+        captureDatabaseError(
+          inTenant((tx) => bookAppointment(tx, tenant, { ...request, appointment })),
+        );
+      expect(await attempt({ localUtcOffsetSeconds: -4 * 60 * 60 })).toMatchObject({
+        code: PG_ERROR.checkViolation,
+        constraint: 'appointments_local_time_coherent',
+      });
+      expect(await attempt({ localStartsAt: '2027-03-04 11:00:00' })).toMatchObject({
+        code: PG_ERROR.checkViolation,
+        constraint: 'appointments_local_time_coherent',
+      });
+      expect(await attempt({ timezone: 'America/Manaus' })).toMatchObject({
+        code: PG_ERROR.checkViolation,
+        constraint: 'appointments_timezone_matches_location',
+      });
+    });
+
     it('pending exige validade do hold', async () => {
       expect(
         await captureSqlState(
@@ -283,12 +525,25 @@ describe('integridade do schema (CHECK, UNIQUE, EXCLUDE)', () => {
               startsAt: new Date('2027-03-03T13:00:00Z'),
               endsAt: new Date('2027-03-03T14:00:00Z'),
               localStartsAt: '2027-03-03 10:00:00',
+              localUtcOffsetSeconds: -3 * 60 * 60,
               timezone: 'America/Sao_Paulo',
               idempotencyKey: randomIdempotencyKey(),
             }),
           ),
         ),
       ).toBe(PG_ERROR.checkViolation);
+    });
+
+    it('created_at é do banco também no INSERT', async () => {
+      const created = first(
+        await inTenant((tx) =>
+          tx
+            .insert(customers)
+            .values({ fullName: 'Retroativo', createdAt: new Date('2000-01-01T00:00:00Z') })
+            .returning({ createdAt: customers.createdAt }),
+        ),
+      );
+      expect(created.createdAt.getUTCFullYear()).toBeGreaterThan(2000);
     });
 
     it('updated_at é mantido pelo banco', async () => {

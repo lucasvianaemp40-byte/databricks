@@ -52,10 +52,73 @@ export function singlePhaseService(
 }
 
 /**
+ * Tipos de ocupação que a reserva grava (`occupancies.kind` do @salon/db): `service` para
+ * cada fase de trabalho, `buffer` para preparo e limpeza. Mantenha em sincronia com o banco:
+ * os testes de paridade do @salon/db reprovam a divergência (src/occupancy-kinds-sync.test.ts
+ * contra schema e migrações; "paridade com o core: o banco aceita em occupancies.kind
+ * exatamente OCCUPANCY_KINDS", em test/integration/constraints.int.test.ts, contra o catálogo).
+ */
+export const OCCUPANCY_KINDS = Object.freeze(['service', 'buffer'] as const);
+
+export type OccupancyKind = (typeof OCCUPANCY_KINDS)[number];
+
+/** Uma linha de `occupancies`: trecho absoluto em que o profissional fica ocupado, com o tipo. */
+export interface OccupancySegment extends Interval {
+  readonly kind: OccupancyKind;
+}
+
+interface LabeledMinuteRange extends MinuteRange {
+  readonly kind: OccupancyKind;
+}
+
+interface ValidatedService {
+  readonly durationMinutes: number;
+  /** Buffer de preparo, cada fase de trabalho e buffer de limpeza, em ordem e SEM unir. */
+  readonly pieces: readonly LabeledMinuteRange[];
+}
+
+/**
  * Valida o serviço e calcula a pegada. Exige ao menos uma fase de trabalho, minutos
  * inteiros positivos e duração visível de no máximo 24 h.
  */
 export function serviceFootprint(service: ServiceDefinition, field = 'service'): ServiceFootprint {
+  const { durationMinutes, pieces } = validateService(service, field);
+  return { durationMinutes, staffBusy: joinAdjacent(pieces) };
+}
+
+/**
+ * Trechos ocupados do profissional para um atendimento que começa em `start`, UNIDOS quando
+ * se tocam: o que o motor de disponibilidade testa contra ocupações e bloqueios. Para gravar
+ * a reserva (uma linha por fase e por buffer, com `kind`), use {@link staffOccupancySegments}.
+ */
+export function staffBusyIntervals(
+  start: Temporal.Instant,
+  service: ServiceDefinition,
+): readonly Interval[] {
+  return serviceFootprint(service).staffBusy.map((range) => ({
+    start: start.add({ minutes: range.startMinute }),
+    end: start.add({ minutes: range.endMinute }),
+  }));
+}
+
+/**
+ * Ocupações que a reserva grava em `occupancies` para um atendimento que começa em `start`:
+ * o buffer de preparo (`buffer`), cada fase de trabalho (`service`) e o buffer de limpeza
+ * (`buffer`), em ordem cronológica e SEM unir trechos encostados. Pausas e buffers de 0 min
+ * não geram linha. A união dos trechos é exatamente {@link staffBusyIntervals}.
+ */
+export function staffOccupancySegments(
+  start: Temporal.Instant,
+  service: ServiceDefinition,
+): readonly OccupancySegment[] {
+  return validateService(service, 'service').pieces.map((piece) => ({
+    kind: piece.kind,
+    start: start.add({ minutes: piece.startMinute }),
+    end: start.add({ minutes: piece.endMinute }),
+  }));
+}
+
+function validateService(service: ServiceDefinition, field: string): ValidatedService {
   const { phases, bufferBeforeMinutes, bufferAfterMinutes } = service;
   assertIntegerInRange(`${field}.bufferBeforeMinutes`, bufferBeforeMinutes, 0, MINUTES_PER_DAY);
   assertIntegerInRange(`${field}.bufferAfterMinutes`, bufferAfterMinutes, 0, MINUTES_PER_DAY);
@@ -63,8 +126,10 @@ export function serviceFootprint(service: ServiceDefinition, field = 'service'):
     throw new SchedulingInputError(`${field}.phases`, 'o serviço precisa de ao menos uma fase');
   }
 
-  const pieces: MinuteRange[] = [];
-  if (bufferBeforeMinutes > 0) pieces.push({ startMinute: -bufferBeforeMinutes, endMinute: 0 });
+  const pieces: LabeledMinuteRange[] = [];
+  if (bufferBeforeMinutes > 0) {
+    pieces.push({ kind: 'buffer', startMinute: -bufferBeforeMinutes, endMinute: 0 });
+  }
   let offset = 0;
   for (const [index, phase] of phases.entries()) {
     const at = `${field}.phases[${index}]`;
@@ -73,7 +138,7 @@ export function serviceFootprint(service: ServiceDefinition, field = 'service'):
     }
     assertIntegerInRange(`${at}.minutes`, phase.minutes, 1, MINUTES_PER_DAY);
     if (phase.kind === 'work') {
-      pieces.push({ startMinute: offset, endMinute: offset + phase.minutes });
+      pieces.push({ kind: 'service', startMinute: offset, endMinute: offset + phase.minutes });
     }
     offset += phase.minutes;
   }
@@ -90,26 +155,12 @@ export function serviceFootprint(service: ServiceDefinition, field = 'service'):
     );
   }
   if (bufferAfterMinutes > 0) {
-    pieces.push({ startMinute: offset, endMinute: offset + bufferAfterMinutes });
+    pieces.push({ kind: 'buffer', startMinute: offset, endMinute: offset + bufferAfterMinutes });
   }
-  return { durationMinutes: offset, staffBusy: joinAdjacent(pieces) };
+  return { durationMinutes: offset, pieces };
 }
 
-/**
- * Alocações absolutas do profissional para um atendimento que começa em `start`
- * (o que a reserva grava em `allocations`, uma linha por trecho ocupado).
- */
-export function staffBusyIntervals(
-  start: Temporal.Instant,
-  service: ServiceDefinition,
-): readonly Interval[] {
-  return serviceFootprint(service).staffBusy.map((range) => ({
-    start: start.add({ minutes: range.startMinute }),
-    end: start.add({ minutes: range.endMinute }),
-  }));
-}
-
-/** Une trechos já ordenados que se tocam ou se sobrepõem. */
+/** Une trechos já ordenados que se tocam ou se sobrepõem (sem o tipo: só o tempo ocupado). */
 function joinAdjacent(pieces: readonly MinuteRange[]): readonly MinuteRange[] {
   const joined: MinuteRange[] = [];
   for (const piece of pieces) {
@@ -120,7 +171,7 @@ function joinAdjacent(pieces: readonly MinuteRange[]): readonly MinuteRange[] {
         endMinute: Math.max(last.endMinute, piece.endMinute),
       };
     } else {
-      joined.push(piece);
+      joined.push({ startMinute: piece.startMinute, endMinute: piece.endMinute });
     }
   }
   return joined;

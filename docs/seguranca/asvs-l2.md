@@ -45,12 +45,12 @@ Detalhes em [headers-e-csp.md](headers-e-csp.md).
 | 3.3.1 / 3.3.2 / 3.3.4 | L1 | Cookies `Secure`, `SameSite` adequado e `HttpOnly` | Sem cookies na fundação. Better Auth com `Secure`, `HttpOnly` e `SameSite=Lax` | Planejado |
 | 3.3.3 | L2 | Prefixo `__Host-` | Configuração do Better Auth com `cookiePrefix: "__Host-…"` + E2E que confere todo `Set-Cookie` | Planejado |
 | 3.4.1 | L1/L2 | HSTS ≥ 1 ano; L2 exige `includeSubDomains` | `max-age=63072000; includeSubDomains` no build de produção. Sem `preload` até existir o domínio definitivo | Atendido |
-| 3.4.3 | L2 | CSP com `object-src 'none'`, `base-uri 'none'` e nonce, hash ou allowlist | Nonce de 128 bits por requisição, `strict-dynamic`, `object-src 'none'`, `base-uri 'none'` (o exemplo do Next usa `'self'`) | Atendido |
+| 3.4.3 | L2 | CSP com `object-src 'none'`, `base-uri 'none'` e nonce, hash ou allowlist | Nonce de 128 bits por requisição, `strict-dynamic`, `object-src 'none'`, `base-uri 'none'` (o exemplo do Next usa `'self'`). O matcher do Proxy cobre todo documento HTML, inclusive 404, `/_next/*` e prefetch (E2E "cobertura do Proxy") | Atendido |
 | 3.4.4 | L2 | `X-Content-Type-Options: nosniff` | Cabeçalho estático | Atendido |
 | 3.4.5 | L2 | `Referrer-Policy` adequada | `strict-origin-when-cross-origin`; `no-referrer` na rota de gerenciar agendamento quando existir | Atendido |
 | 3.4.6 | L2 | `frame-ancestors` contra clickjacking | `frame-ancestors 'none'` + `X-Frame-Options: DENY` | Atendido |
 | 3.4.8 | L3 | `Cross-Origin-Opener-Policy` | `same-origin` (adotado por ser barato); `Cross-Origin-Resource-Policy: same-site` | Atendido |
-| 3.5.1–3.5.3 | L1 | Proteção contra CSRF e métodos seguros | Server Actions: checagem nativa de `Origin`. `/api/health` só aceita GET (POST devolve 405). `assertSameOrigin` em Route Handlers mutáveis | Parcial |
+| 3.5.1–3.5.3 | L1 | Proteção contra CSRF e métodos seguros | Server Actions: checagem nativa de `Origin`. `/api/health` só aceita GET (POST devolve 405; `TRACE` devolve 500 sem eco por limitação do Next 16.4, e o bloqueio com 405 fica na borda). `assertSameOrigin` em Route Handlers mutáveis | Parcial |
 | 3.7.2 | L2 | Redirecionamento externo só por allowlist | `trustedOrigins` do Better Auth; redirects próprios por allowlist | Planejado |
 
 ## V4 API e web services
@@ -146,7 +146,7 @@ Tudo planejado para a próxima iteração ([ADR-0004](../adr/0004-autenticacao-b
 |---|---|---|---|---|
 | 14.1.1 / 14.1.2 | L2 | Classificar dados sensíveis e definir requisitos por nível | [Inventário de dados](../lgpd/inventario-de-dados.md). Classificação no schema (`COMMENT ON COLUMN` + checagem no CI) | Parcial |
 | 14.2.1 | L1 | Nada sensível em URL | Tokens de link trocados por cookie no primeiro acesso, com redirect para URL limpa; IDs opacos nas rotas | Planejado |
-| 14.2.3 | L2 | Não enviar dado sensível a terceiros (trackers) | Sem scripts, fontes ou imagens de terceiros; CSP `'self'`; `images.remotePatterns` vazio | Atendido |
+| 14.2.3 | L2 | Não enviar dado sensível a terceiros (trackers) | Sem scripts, fontes ou imagens de terceiros; CSP `'self'`; sem `next/image` e otimizador de imagens desligado (`images.unoptimized: true`) | Atendido |
 | 14.2.8 | L3 | Remover metadados de arquivos | EXIF removido das fotos (fase 2) | Planejado |
 | 14.3.1–14.3.3 | L1/L2 | Limpar armazenamento do cliente no logout; `no-store`; nada sensível em localStorage | `Clear-Site-Data: "cache", "storage"` no logout; `Cache-Control: no-store` em páginas autenticadas | Planejado |
 
@@ -155,19 +155,19 @@ Tudo planejado para a próxima iteração ([ADR-0004](../adr/0004-autenticacao-b
 | ID | Nível | Requisito (resumo) | Como atendemos | Status |
 |---|---|---|---|---|
 | 15.1.1 | L1 | Política de atualização de componentes | [ADR-0007](../adr/0007-politica-de-supply-chain.md): Renovate, quarentena, PR de vulnerabilidade imediato; patch crítico em até 7 dias (Next.js em até 48 h) | Atendido |
-| 15.1.3 / 15.2.2 | L2 | Funcionalidades caras com proteção de disponibilidade | Motor com limites de entrada (366 dias por consulta, horizonte de 2 anos). Exportações e relatórios assíncronos | Parcial |
+| 15.1.3 / 15.2.2 | L2 | Funcionalidades caras com proteção de disponibilidade | Motor com teto de trabalho (`MAX_CANDIDATE_STARTS` = 20.160 inícios candidatos por consulta, até 366 datas, antecedência e horizonte até 2 anos), ~200 ms no pior caso medido. Planejado: janela de 31 dias e rate limit na página pública, exportações e relatórios assíncronos | Parcial |
 | 15.3.1 / 15.3.3 | L1/L2 | Devolver só o necessário; proteção contra mass assignment | DTOs; Zod `.strict()`; `tenant_id`, `role` e `status` nunca vêm do cliente | Planejado |
 | 15.3.2 | L2 | Requisições de saída sem seguir redirect | `safeFetch` com `redirect: "manual"` | Planejado |
 | 15.3.4 | L2 | IP real do cliente por cabeçalho confiável | Um único cabeçalho sobrescrito pela plataforma | Planejado |
 | 15.3.6 | L2 | Prototype pollution | Zod com strip; `Map` ou `Object.create(null)` em merges | Planejado |
-| — | — | Concorrência segura | `EXCLUDE` no banco; lock otimista (`version`); `pg_advisory_xact_lock` no runner; `FOR SHARE` na derivação de ocupação | Atendido |
+| — | — | Concorrência segura | `EXCLUDE` no banco; lock otimista (`version`); `pg_advisory_xact_lock` no runner; `FOR SHARE` na derivação de ocupação, que depende do READ COMMITTED fixado pelo `withTenant`; `tx` recusado depois do callback (`TransactionClosedError`) | Atendido |
 
 ## V16 Logs e tratamento de erros
 
 | ID | Nível | Requisito (resumo) | Como atendemos | Status |
 |---|---|---|---|---|
 | 16.2.1 / 16.2.2 | L2 | Logs com quem, quando, onde e o quê, em UTC | `appointment_events` com ator, transição e instante. Logs da aplicação em pino JSON com `requestId`, `tenantId` e `userId` | Parcial |
-| 16.2.5 | L2 | Tratar dado sensível em log conforme a classificação | Regra Semgrep `pii-in-logs`. Redaction no pino e no Sentry | Parcial |
+| 16.2.5 | L2 | Tratar dado sensível em log conforme a classificação | Regra Semgrep `pii-in-logs` (inclusive `console.*`, Sentry e analytics). Redaction no pino e no Sentry ([ADR-0010](../adr/0010-observabilidade.md), proposto) | Parcial |
 | 16.3.1–16.3.3 | L2 | Logar autenticação, falhas de autorização e tentativas de bypass | Eventos `auth.*`, `authz.denied`, `ratelimit.hit`, `rls.violation` | Planejado |
 | 16.4.2 / 16.4.3 | L2 | Logs protegidos contra alteração e enviados a sistema separado | `appointment_events` append-only (bloqueado até para o dono). Dreno externo de logs | Parcial |
 | 16.5.1 | L2 | Mensagem de erro genérica | Páginas de erro só com `digest`; `@salon/db` traduz erros sem `DETAIL` (que pode conter dado pessoal) | Atendido |

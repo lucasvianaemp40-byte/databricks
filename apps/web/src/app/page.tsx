@@ -1,5 +1,11 @@
 import type { AppointmentStatus } from '@salon/scheduling-core';
+import type { Metadata } from 'next';
 import { appointmentStatusLabel } from '../lib/appointment-status-labels';
+
+export const metadata: Metadata = {
+  // URL canônica absoluta, resolvida contra o metadataBase (APP_URL, lida em runtime).
+  alternates: { canonical: '/' },
+};
 
 interface Feature {
   readonly title: string;

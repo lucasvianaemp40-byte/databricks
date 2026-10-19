@@ -6,26 +6,26 @@
   "tasks": {
     "build": {
       "env": [
-        "APP_ENV",
-        "NEXT_PUBLIC_APP_URL"
+        "APP_ENV"
       ],
       "passThroughEnv": [
+        "APP_URL",
         "NEXT_TELEMETRY_DISABLED"
       ]
     },
     "dev": {
       "passThroughEnv": [
         "APP_ENV",
-        "NEXT_PUBLIC_APP_URL",
+        "APP_URL",
         "NEXT_TELEMETRY_DISABLED"
       ]
     },
     "typecheck": {
       "env": [
-        "APP_ENV",
-        "NEXT_PUBLIC_APP_URL"
+        "APP_ENV"
       ],
       "passThroughEnv": [
+        "APP_URL",
         "NEXT_TELEMETRY_DISABLED"
       ]
     },

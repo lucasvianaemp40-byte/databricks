@@ -1,7 +1,8 @@
 ---
 paths:
   - "packages/db/drizzle/**"
-  - "packages/db/src/schema/**"
+  - "packages/db/src/**"
+  - "packages/db/test/**"
   - "packages/db/**/migrations/**"
 ---
 
@@ -16,5 +17,18 @@ paths:
 - Tabela de tenant: `tenantIdColumn()`, FKs compostas `(tenant_id, id)`, UNIQUE começando por
   `tenant_id`, ENABLE + FORCE RLS, `tenant_isolation` RESTRICTIVE, `app_access` PERMISSIVE,
   GRANTs mínimos para `app_user`/`app_worker`, trigger de `updated_at`.
-- `timestamptz` para instantes, fuso IANA validado, dinheiro em centavos inteiros.
+- `timestamptz` para instantes, fuso IANA validado (`Area/Local` sem dígito: `'Etc/UTC'`,
+  nunca `'UTC'` nem `Etc/GMT+3`), dinheiro em centavos inteiros.
 - Depois de gerar: `pnpm --filter @salon/db test`, `pnpm test:db` e a skill `review-migration`.
+
+## Acesso a dados (`withTenant`)
+
+- O `tx` só vale enquanto `fn` executa: nada de `after()`, `setTimeout`, fire-and-forget ou
+  builder devolvido; ramos paralelos que podem falhar vão em `Promise.allSettled`, não em
+  `Promise.all` fail-fast. Uso tardio do `tx` é recusado com `TransactionClosedError` (bug do
+  chamador: 500 e correção, nunca retentativa).
+- A PK `id` é global: id vem do servidor (`newId()`/default), nunca do cliente em
+  INSERT/upsert, e `id` nunca é atualizado. `IdentifierConflictError` vira resposta genérica
+  (404/409), nunca "já existe".
+- `DrizzleQueryError` e o `cause` dos erros traduzidos carregam os parâmetros da consulta
+  (PII): não registre crus; use `code`/`sqlState`/`constraint`.

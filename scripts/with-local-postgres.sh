@@ -5,14 +5,21 @@
 #
 # - Se TEST_DATABASE_URL já estiver definida (CI com serviço postgres, banco próprio),
 #   apenas executa o comando.
-# - Senão, cria um cluster EFÊMERO com os binários locais (/usr/lib/postgresql/<versão>/bin,
-#   a maior versão instalada), escutando só em 127.0.0.1 numa porta livre, com senha
-#   aleatória (scram-sha-256). Exporta TEST_DATABASE_URL com o SUPERUSUÁRIO do cluster
-#   (o pacote @salon/db usa essa conexão para migrar e criar os papéis app_*), executa o
-#   comando e destrói o cluster ao sair, inclusive em erro ou Ctrl-C.
+# - Senão, cria um cluster EFÊMERO com os binários locais do PostgreSQL 16 ou mais novo,
+#   escutando só em 127.0.0.1 numa porta livre, com senha aleatória (scram-sha-256).
+#   Exporta TEST_DATABASE_URL com o SUPERUSUÁRIO do cluster (o pacote @salon/db usa essa
+#   conexão para migrar e criar os papéis app_*), executa o comando e destrói o cluster ao
+#   sair, inclusive em erro ou Ctrl-C.
+#
+# Onde procura os binários (initdb, pg_ctl e psql), nesta ordem: PG_BIN_DIR; o initdb do PATH
+# (Fedora, Arch, Homebrew linkado, Postgres.app); /usr/lib/postgresql/<versão>/bin (Debian e
+# Ubuntu, a maior versão instalada); `pg_config --bindir`. Sem binários, ou com versão anterior
+# à 16, sai com 69 e explica as alternativas (inclusive o compose.yaml da raiz).
 #
 # O PostgreSQL recusa rodar como root: como root, initdb/pg_ctl rodam como o usuário sem
 # privilégio PG_EPHEMERAL_USER (padrão: postgres) via runuser.
+#
+# Testes: scripts/with-local-postgres.test.mjs (pnpm test:root).
 #
 # Variáveis opcionais:
 #   PG_BIN_DIR          diretório dos binários (initdb, pg_ctl, psql)
@@ -32,9 +39,33 @@ fi
 
 log() { printf '[with-local-postgres] %s\n' "$*" >&2; }
 
+# Versão mínima suportada pelo @salon/db (packages/db/README.md: compatível com 16 e 18).
+REQUIRED_MAJOR=16
+
+# Sai com 69 (EX_UNAVAILABLE): o motivo e as três formas de ter um PostgreSQL de teste.
+no_usable_postgres() {
+  log "$1"
+  cat >&2 <<'EOF'
+[with-local-postgres] O `pnpm test:db` precisa de um PostgreSQL 16+ de TESTE. Escolha uma saída:
+  1. Binários locais do servidor (initdb, pg_ctl e psql): no PATH, em
+     /usr/lib/postgresql/<versão>/bin ou pelo `pg_config`. Fora disso, exporte PG_BIN_DIR.
+     macOS com Homebrew: PG_BIN_DIR="$(brew --prefix postgresql@16)/bin".
+  2. Docker ou Podman: `docker compose up -d --wait postgres-test` e exporte a
+     TEST_DATABASE_URL indicada no compose.yaml da raiz.
+  3. Qualquer cluster DESCARTÁVEL: exporte TEST_DATABASE_URL com o superusuário dele.
+No Windows, rode pelo WSL 2 (o script é bash).
+EOF
+  exit 69
+}
+
 find_bin_dir() {
   if [[ -n "${PG_BIN_DIR:-}" ]]; then
     printf '%s\n' "$PG_BIN_DIR"
+    return
+  fi
+  local from_path
+  if from_path="$(command -v initdb 2>/dev/null)" && [[ -n "$from_path" ]]; then
+    dirname -- "$from_path"
     return
   fi
   local candidates
@@ -50,9 +81,20 @@ find_bin_dir() {
   return 1
 }
 
-if ! BIN="$(find_bin_dir)" || [[ ! -x "$BIN/initdb" || ! -x "$BIN/pg_ctl" || ! -x "$BIN/psql" ]]; then
-  log "PostgreSQL local não encontrado (initdb/pg_ctl/psql). Defina TEST_DATABASE_URL ou PG_BIN_DIR."
-  exit 69
+if ! BIN="$(find_bin_dir)"; then
+  no_usable_postgres "PostgreSQL local não encontrado (initdb, pg_ctl e psql)."
+fi
+if [[ ! -x "$BIN/initdb" || ! -x "$BIN/pg_ctl" || ! -x "$BIN/psql" ]]; then
+  no_usable_postgres "faltam initdb, pg_ctl ou psql em $BIN."
+fi
+
+# "initdb (PostgreSQL) 16.10 (Debian ...)" ou "initdb (PostgreSQL) 18beta1" -> 16 ou 18.
+PG_MAJOR="$("$BIN/initdb" --version 2>/dev/null | sed -nE 's/^initdb \(PostgreSQL\) ([0-9]+).*/\1/p' | head -n 1 || true)"
+if [[ ! "$PG_MAJOR" =~ ^[0-9]+$ ]]; then
+  no_usable_postgres "não foi possível ler a versão de $BIN/initdb."
+fi
+if ((PG_MAJOR < REQUIRED_MAJOR)); then
+  no_usable_postgres "PostgreSQL $PG_MAJOR em $BIN: o @salon/db exige $REQUIRED_MAJOR ou mais novo."
 fi
 
 DB_NAME="${PG_EPHEMERAL_DB:-app_test}"
@@ -79,6 +121,7 @@ WORK_DIR="$(mktemp -d /tmp/salon-pg.XXXXXX)"
 DATA_DIR="$WORK_DIR/data"
 STARTED=0
 
+# shellcheck disable=SC2329 # chamada pelo trap EXIT logo abaixo.
 cleanup() {
   local status=$?
   trap - EXIT INT TERM

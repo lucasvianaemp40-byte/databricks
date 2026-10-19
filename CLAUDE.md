@@ -23,13 +23,14 @@ Leia o README do pacote antes de mexer nele: `packages/db/README.md` (modelo de 
 
 | Comando | Quando |
 | --- | --- |
-| `pnpm verify` | antes de todo commit: format:check, lint, typecheck, test, build |
-| `pnpm test:db` | mudou `packages/db` ou isolamento: PostgreSQL real (efêmero se não houver `TEST_DATABASE_URL`) |
+| `pnpm verify` | antes de todo commit: format:check, lint, typecheck, test, build e knip |
+| `pnpm test` | testes dos pacotes (turbo) e `pnpm test:root` (`eslint.base.test.mjs`, `biome-plugins/` e `scripts/`); `test:root` e `test:hooks` reprovam teste pulado ou pendente (`scripts/no-disabled-tests-reporter.mjs`) |
+| `pnpm test:db` | mudou `packages/db` ou isolamento: PostgreSQL real. Usa `TEST_DATABASE_URL`; sem ela, sobe um cluster efêmero com os binários locais (PG 16+); sem binários, `docker compose up -d --wait postgres-test` e exporte a URL do `compose.yaml` |
 | `pnpm e2e` | mudou UI/fluxo: Playwright contra o build de produção (porta 3100) |
-| `pnpm test:hooks` | mudou `.claude/hooks/` (e `pnpm exec tsc -p .claude/hooks`) |
+| `pnpm test:hooks` | mudou `.claude/hooks/` ou `.claude/settings.json` (e `pnpm exec tsc -p .claude/hooks`) |
 | `pnpm --filter <pacote> <script>` | ciclo rápido num pacote (`test`, `typecheck`, `lint`) |
 | `pnpm --filter @salon/db generate` / `generate:custom <nome>` | gerar migração (nunca `drizzle-kit push/migrate`) |
-| `pnpm knip` | código e dependências sem uso |
+| `pnpm knip` | código e dependências sem uso (já roda no `verify` e no job `static` do CI); sozinho, para o ciclo rápido |
 
 Node 22.22+ e pnpm 11 (via corepack). Nunca use npm, yarn ou npx para instalar ou rodar
 pacotes: use `pnpm --filter <pacote> exec <bin>`.
@@ -46,7 +47,12 @@ pacotes: use `pnpm --filter <pacote> exec <bin>`.
    com `TZ=UTC`; testes fixam o fuso explicitamente.
 3. **TDD e testes intocáveis.** Teste que falha primeiro, depois o código. Nunca enfraqueça um
    teste: nada de apagar asserção, `.skip`/`.only`, trocar valor esperado sem prova, aumentar
-   timeout para esconder lentidão, afrouxar lint/tsconfig ou limiar de cobertura.
+   timeout para esconder lentidão, afrouxar lint/tsconfig ou limiar de cobertura. O lint
+   (Biome com `biome-plugins/no-disabled-tests.grit`) barra `skip`/`only`/`todo`/`fails`; dica
+   de exclusão de cobertura (`v8`/`c8`/`istanbul ignore`, `node:coverage`) quebra o meta-teste
+   `test-hygiene` de cada pacote (e o ESLint de todos os pacotes, via `eslint.base.mjs`), e o
+   hook `guard-files` pede confirmação. Teste que termina pulado ou pendente reprova a execução
+   no core e em `pnpm test:root`/`pnpm test:hooks` (reporters próprios).
 4. **Segurança por padrão** (OWASP Top 10:2025, API Top 10, ASVS 5.0 nível 2): zod estrito em
    toda entrada; autorização dentro de cada Server Action/Route Handler (o Proxy não autoriza);
    erros sem stack, SQL ou `DETAIL` do banco; fail-closed. Regras do domínio em
@@ -97,15 +103,17 @@ Regras por caminho em `.claude/rules/` carregam sozinhas ao tocar banco, domíni
 - Critérios de aceite cobertos por testes que falharam antes da implementação.
 - Caso negativo cross-tenant para todo acesso a dado novo; RLS e constraints testadas com
   `pnpm test:db` quando o banco mudou.
-- `pnpm verify` verde; `pnpm test:db`, `pnpm e2e` e `pnpm test:hooks` quando aplicável.
+- `pnpm verify` verde (inclui `knip`); `pnpm test:db`, `pnpm e2e` e `pnpm test:hooks` quando
+  aplicável.
 - Revisão de segurança (`pre-pr`) sem achado aberto, ou risco aceito e justificado no PR.
 - Sem PII/segredo em código, log ou teste; dependências novas justificadas.
 - Documentação e ADR atualizadas quando o comportamento ou a arquitetura mudou.
 
 ## Ambiente do agente
 
-Hooks em `.claude/hooks/` bloqueiam comandos destrutivos, leitura de segredos, push perigoso,
-edição de lockfile e de migração publicada (fail-closed), formatam/lintam o arquivo editado e
+Hooks em `.claude/hooks/` bloqueiam comandos destrutivos (no Bash e no script do Monitor),
+leitura de segredos, push perigoso, edição de lockfile e de migração publicada (fail-closed),
+formatam/lintam o arquivo editado e
 rodam o typecheck dos pacotes alterados ao final do turno. Se um hook bloquear, leia o motivo
 e ajuste a abordagem; não tente contorná-lo.
 

@@ -45,8 +45,13 @@ processo separado (`apps/worker`, Node 24, no Fly.io `gru`).
   - `dedupe_key` única por tenant na tabela de notificações, porque cada mensagem de WhatsApp
     é cobrada;
   - ao remarcar, cancelar e recriar os jobs.
-- **Papel `app_worker`**: lê o tenant do job e altera só status (GRANT já existente). Precisa
-  dos privilégios no schema `pgboss`.
+- **Papel `app_worker`**: lê o tenant do job e só tem UPDATE de `appointments.status` e de
+  `occupancies.active` (GRANT de coluna já existente; `active` é recalculada por trigger a
+  partir do status). Expirar hold e marcar no-show cabem nisso. Job novo que precise escrever
+  outra coluna ganha GRANT de coluna explícito numa migração nova e o ajuste em
+  `assert_security_invariants()`, que hoje recusa INSERT, DELETE e UPDATE de tabela inteira
+  para o `app_worker`. Precisa também dos privilégios no schema `pgboss`, o que exige o mesmo
+  ajuste.
 - **Conexão direta** (sem pooler em modo transação) para o worker, por causa de
   `LISTEN/NOTIFY` e conexões longas.
 - **Saída de rede** do worker só por `safeFetch` (allowlist, sem redirect, bloqueio de IPs não

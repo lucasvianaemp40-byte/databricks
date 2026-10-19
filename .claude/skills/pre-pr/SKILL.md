@@ -13,7 +13,9 @@ Nesta ordem; pare e corrija ao primeiro bloqueio:
 3. O diff toca autenticação, autorização, queries, RLS, Server Actions, webhooks ou a página
    pública? Skill `pentest-tenant` no diff.
 4. O diff toca dado pessoal, anamnese, logs, analytics ou integrações? Skill `lgpd-check`.
-5. Há migração ou mudança de schema? Skill `review-migration` com veredito APROVAR.
+5. Há migração ou mudança de schema? Skill `review-migration` com veredito APROVAR. Se a
+   skill não estiver disponível na sessão, chame o subagente `migration-reviewer`
+   (ferramenta Agent) com os arquivos de migração; vale o mesmo veredito.
 6. Dependência nova ou atualizada (`package.json`, `pnpm-lock.yaml`): liste pacote, versão
    exata, idade da versão (quarentena >= 3 dias), mantenedor, licença, scripts de instalação
    (`allowBuilds`) e por que é necessária. Prefira não adicionar.

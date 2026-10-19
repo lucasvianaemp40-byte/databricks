@@ -25,8 +25,23 @@ export const idColumn = () => uuid('id').primaryKey().defaultRandom().$defaultFn
 /** `tenant_id NOT NULL`, preenchido pelo contexto da transação quando omitido no INSERT. */
 export const tenantIdColumn = () => uuid('tenant_id').notNull().default(currentTenantIdSql);
 
-/** Instante absoluto (timestamptz) lido como `Date` (sempre em UTC dentro de `withTenant`). */
+/**
+ * Instante absoluto (timestamptz) lido como `Date` (sempre em UTC dentro de `withTenant`).
+ *
+ * Precisão: MILISSEGUNDO. O `Date` do driver descarta microssegundos, então horários de agenda
+ * (início/fim de agendamento, item, ocupação e bloqueio) têm CHECK `<tabela>_instant_precision`
+ * (`instantHasMillisecondPrecision`). SQL manual ou job que grave esses horários usa
+ * `date_trunc('milliseconds', ...)` (ou minuto), nunca `now()` cru.
+ */
 export const instant = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
+
+/** `<coluna> = date_trunc('milliseconds', <coluna>)` para cada coluna (instante sem microssegundos). */
+export function instantHasMillisecondPrecision(...columns: AnyPgColumn[]): SQL {
+  return sql.join(
+    columns.map((column) => sql`date_trunc('milliseconds', ${column}) = ${column}`),
+    sql` AND `,
+  );
+}
 
 /** `created_at`/`updated_at`; `updated_at` é mantido pelo trigger `touch_updated_at`. */
 export const timestamps = () => ({

@@ -1,7 +1,6 @@
 ---
 name: ms-playwright-cli
 description: Automate browser interactions, test web pages and work with Playwright tests.
-allowed-tools: Bash(pnpm --filter @salon/web exec playwright cli *)
 ---
 
 > Vendorizado de github.com/microsoft/playwright-cli @ b85c7a736bb4 (Apache-2.0) por scripts/vendor-claude-skills.sh; alterações locais em THIRD_PARTY_NOTICES.md.
@@ -401,7 +400,7 @@ pnpm --filter @salon/web exec playwright cli kill-all
 
 ## Installation
 
-In this repository the CLI comes from the app's Playwright, pinned by `pnpm-lock.yaml`: run `pnpm --filter @salon/web exec playwright cli <command>`. Never install `@playwright/cli` globally and never use `npx` or `npm install -g` (dependency quarantine). Never `attach --cdp`, `attach --extension` or `--profile` pointing at a personal browser: only isolated sessions against http://localhost:3000 (dev) or http://127.0.0.1:3100 (production build used by E2E).
+In this repository the CLI comes from the app's Playwright, pinned by `pnpm-lock.yaml`: run `pnpm --filter @salon/web exec playwright cli <command>`. Never install `@playwright/cli` globally and never use `npx` or `npm install -g` (dependency quarantine). Never `attach --cdp`, `attach --extension`, `--profile` or `--persistent` pointing at a personal browser (the guard denies them): only isolated sessions against http://localhost:3000 (dev) or http://127.0.0.1:3100 (production build used by E2E). This skill pre-approves no command: `run-code`, `eval`, `state-save`/`state-load`, `cookie-*`, `localstorage-*`/`sessionstorage-*`, `route`, `upload`, `install-browser`, `--filename` and `--config` always ask for confirmation.
 
 ## Example: Form submission
 

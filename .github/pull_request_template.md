@@ -6,7 +6,7 @@
 
 <!-- Comandos rodados e resultado. O gate local é `pnpm verify`; banco e E2E são separados. -->
 
-- [ ] `pnpm verify` (format:check, lint, typecheck, test e build) passou localmente
+- [ ] `pnpm verify` (format:check, lint, knip, typecheck, test e build) passou localmente
 - [ ] `pnpm test:db` passou (obrigatório se mexeu em `packages/db`, RLS ou query)
 - [ ] `pnpm e2e` passou (obrigatório se mexeu em tela, rota, cabeçalho ou fluxo de reserva)
 - [ ] Regra de negócio nova tem teste de exemplo e, no domínio, teste de propriedade (fast-check)

@@ -30,6 +30,12 @@ export interface TenantFixture {
   readonly appointmentId: string;
 }
 
+export interface OccupancyRequest {
+  readonly startsAt: Date;
+  readonly endsAt: Date;
+  readonly kind?: 'service' | 'buffer';
+}
+
 export interface BookingRequest {
   readonly staffId: string;
   readonly startsAt: Date;
@@ -37,6 +43,14 @@ export interface BookingRequest {
   readonly status?: 'pending' | 'confirmed';
   readonly holdExpiresAt?: Date;
   readonly idempotencyKey?: string;
+  /** Ocupações do item (padrão: uma `service` igual à janela do item). */
+  readonly occupancies?: readonly OccupancyRequest[];
+  /** Colunas extras do agendamento (para testar o que o banco aceita ou ignora). */
+  readonly appointment?: Partial<typeof appointments.$inferInsert>;
+  /** Colunas extras do item (buffers congelados, por exemplo). */
+  readonly item?: Partial<typeof appointmentItems.$inferInsert>;
+  /** Unidade do agendamento (padrão: a do fixture, em America/Sao_Paulo). */
+  readonly location?: { readonly id: string; readonly timezone: string };
 }
 
 export interface BookedAppointment {
@@ -67,6 +81,15 @@ export function wallTime(instant: Date, timeZone: string = TIMEZONE): string {
   }).format(instant);
 }
 
+/**
+ * Offset UTC, em segundos, da hora de parede de `instant` no fuso (ex.: -10800 em São Paulo).
+ * A hora de parede é truncada ao segundo, como a coluna `local_starts_at`.
+ */
+export function utcOffsetSeconds(instant: Date, timeZone: string = TIMEZONE): number {
+  const wallAsUtc = new Date(`${wallTime(instant, timeZone).replace(' ', 'T')}Z`).getTime();
+  return Math.round((wallAsUtc - Math.floor(instant.getTime() / 1000) * 1000) / 1000);
+}
+
 export function randomIdempotencyKey(): string {
   return `test-${randomBytes(8).toString('hex')}`;
 }
@@ -78,21 +101,24 @@ export async function bookAppointment(
   request: BookingRequest,
 ): Promise<BookedAppointment> {
   const status = request.status ?? 'confirmed';
+  const location = request.location ?? { id: fixture.locationId, timezone: TIMEZONE };
   const appointment = first(
     await tx
       .insert(appointments)
       .values({
-        locationId: fixture.locationId,
+        locationId: location.id,
         customerId: fixture.customerId,
         status,
         source: 'staff',
         startsAt: request.startsAt,
         endsAt: request.endsAt,
-        localStartsAt: wallTime(request.startsAt),
-        timezone: TIMEZONE,
+        localStartsAt: wallTime(request.startsAt, location.timezone),
+        localUtcOffsetSeconds: utcOffsetSeconds(request.startsAt, location.timezone),
+        timezone: location.timezone,
         holdExpiresAt:
           request.holdExpiresAt ?? (status === 'pending' ? new Date('2099-01-01T00:00:00Z') : null),
         idempotencyKey: request.idempotencyKey ?? randomIdempotencyKey(),
+        ...request.appointment,
       })
       .returning({ id: appointments.id }),
   );
@@ -107,23 +133,33 @@ export async function bookAppointment(
         staffId: request.staffId,
         serviceName: 'Corte',
         durationMin,
+        phases: [{ kind: 'work', minutes: durationMin }],
         priceCents: 6000,
         commissionBps: 4000,
         startsAt: request.startsAt,
         endsAt: request.endsAt,
+        ...request.item,
       })
       .returning({ id: appointmentItems.id }),
   );
+  const requested = request.occupancies ?? [{ startsAt: request.startsAt, endsAt: request.endsAt }];
+  if (requested.length === 0) {
+    // Item sem ocupação: só para testar a completude conferida no COMMIT.
+    return { appointmentId: appointment.id, itemId: item.id, occupancyId: '' };
+  }
   const occupancy = first(
     await tx
       .insert(occupancies)
-      .values({
-        appointmentId: appointment.id,
-        appointmentItemId: item.id,
-        staffId: request.staffId,
-        startsAt: request.startsAt,
-        endsAt: request.endsAt,
-      })
+      .values(
+        requested.map((piece) => ({
+          appointmentId: appointment.id,
+          appointmentItemId: item.id,
+          staffId: request.staffId,
+          kind: piece.kind ?? 'service',
+          startsAt: piece.startsAt,
+          endsAt: piece.endsAt,
+        })),
+      )
       .returning({ id: occupancies.id }),
   );
   return { appointmentId: appointment.id, itemId: item.id, occupancyId: occupancy.id };

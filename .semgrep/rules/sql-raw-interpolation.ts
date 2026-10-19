@@ -1,5 +1,8 @@
+// biome-ignore-all assist/source/organizeImports: fixture do semgrep; o alias de `sql` fica num import próprio.
 // Fixture de `semgrep --test` para sql-raw-interpolation. Código vulnerável de propósito.
 import { sql } from 'drizzle-orm';
+import { sql as rawSql } from 'drizzle-orm';
+import * as orm from 'drizzle-orm';
 
 declare const db: {
   execute: (query: unknown) => Promise<unknown>;
@@ -54,4 +57,34 @@ export async function examples(): Promise<void> {
 
   // ok: sql-raw-interpolation
   await client.query("select set_config('lock_timeout', $1, true)", [`${lockTimeoutMs}ms`]);
+}
+
+// sql.raw por alias ou namespace do drizzle-orm, e a forma { text } do node-postgres.
+export async function aliasesAndConfigObject(): Promise<void> {
+  // ruleid: sql-raw-interpolation
+  await db.execute(rawSql.raw(orderBy));
+
+  // ruleid: sql-raw-interpolation
+  await db.execute(orm.sql.raw(orderBy));
+
+  // ruleid: sql-raw-interpolation
+  await client.query({ text: `select * from app.customers where id = '${customerId}'` });
+
+  // ruleid: sql-raw-interpolation
+  await client.query({ text: "select * from app.customers where id = '" + customerId + "'" });
+
+  // ok: sql-raw-interpolation
+  await db.execute(rawSql.raw('select 1'));
+
+  // ok: sql-raw-interpolation
+  await db.execute(orm.sql.raw('select 1'));
+
+  // ok: sql-raw-interpolation
+  await client.query({ text: 'select * from app.customers where id = $1', values: [customerId] });
+
+  // ok: sql-raw-interpolation
+  await client.query({
+    text: `select * from ${BOOKKEEPING_TABLE} where hash = $1`,
+    values: [orderBy],
+  });
 }

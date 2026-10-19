@@ -15,7 +15,15 @@ import pg from 'pg';
  * - imutabilidade: recusa migração já aplicada cujo arquivo mudou (hash) e migração nova com
  *   timestamp anterior à última aplicada (o Drizzle a ignoraria em silêncio);
  * - ao final de TODA execução chama `app_private.assert_security_invariants()`: se RLS,
- *   papéis ou privilégios regrediram (inclusive por GRANT manual), nada é commitado.
+ *   papéis, privilégios, triggers ou EXCLUDE regrediram (inclusive por GRANT manual), nada é
+ *   commitado. Falha fechada: depois da migração que cria a função, ela é obrigatória, e o
+ *   hash do corpo precisa bater com `INVARIANTS_FUNCTION_SHA256` (a função é do app_migrator,
+ *   então uma migração ou um ajuste manual poderia apagá-la, renomeá-la ou esvaziá-la). Os
+ *   atributos críticos dos papéis também são conferidos aqui, com SQL do próprio runner.
+ *
+ * O portão pega erro honesto e drift (mudança manual no banco). Não pega migração maliciosa:
+ * quem escreve migração é dono de tudo. Para isso valem a revisão (CODEOWNERS) e os
+ * meta-testes de catálogo do `pnpm test:db`.
  *
  * A contabilidade é a mesma do Drizzle (`drizzle.__drizzle_migrations`: hash sha256 do
  * arquivo e `created_at` = `when` do journal), então as ferramentas do drizzle-kit continuam
@@ -35,6 +43,19 @@ const BOOKKEEPING_TABLE = 'drizzle.__drizzle_migrations';
 /** Chave arbitrária e fixa do advisory lock que serializa runners concorrentes. */
 const MIGRATION_LOCK_KEY = '7315420610';
 const INVARIANTS_FUNCTION = 'app_private.assert_security_invariants()';
+/** A partir desta migração a função de invariantes é obrigatória (ausência = falha). */
+const INVARIANTS_MIGRATION_TAG = '0003_tenant_security';
+/** Papéis cujos atributos o runner confere sem depender de código das migrações. */
+const RUNTIME_ROLES = ['app_user', 'app_worker'] as const;
+
+/**
+ * sha256 do corpo (`prosrc`) de `app_private.assert_security_invariants()` como definido nas
+ * migrações. Mudou a função numa migração nova? Atualize esta constante no mesmo PR: o teste
+ * `src/migrate.test.ts` compara com o corpo extraído das migrações.
+ */
+export const INVARIANTS_FUNCTION_SHA256 =
+  // biome-ignore lint/security/noSecrets: hash sha256 público do corpo da função, não é segredo.
+  '1abfe75cc0bcc97fb5c361cbbadb43763f3e64d484d223ab36588937b8e58fb6';
 
 export class MigrationError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -217,13 +238,77 @@ async function applyMigration(client: pg.Client, migration: MigrationFile): Prom
   ]);
 }
 
-async function assertSecurityInvariants(client: pg.Client): Promise<void> {
-  const { rows } = await client.query<{ present: boolean }>(
-    'SELECT to_regprocedure($1) IS NOT NULL AS present',
+async function assertRoleAttributes(client: pg.Client): Promise<void> {
+  const { rows } = await client.query<{
+    rolname: string;
+    rolsuper: boolean;
+    rolbypassrls: boolean;
+    rolcanlogin: boolean;
+  }>(
+    `SELECT rolname, rolsuper, rolbypassrls, rolcanlogin
+       FROM pg_catalog.pg_roles WHERE rolname = ANY ($1::text[])`,
+    [[MIGRATION_OWNER_ROLE, ...RUNTIME_ROLES]],
+  );
+  const problems = rows.flatMap((role) => [
+    ...(role.rolsuper || role.rolbypassrls
+      ? [`papel ${role.rolname} é SUPERUSER ou BYPASSRLS`]
+      : []),
+    ...(role.rolname === MIGRATION_OWNER_ROLE && role.rolcanlogin
+      ? [`papel ${MIGRATION_OWNER_ROLE} tem LOGIN (o dono precisa ser NOLOGIN)`]
+      : []),
+  ]);
+  if (problems.length > 0) {
+    throw new MigrationError(
+      `verificação de segurança pós-migração falhou: ${problems.join('; ')}. Nada foi commitado.`,
+    );
+  }
+}
+
+interface InvariantsFunctionRow {
+  readonly body: string;
+  readonly security_definer: boolean;
+  readonly owner: string;
+  readonly language: string;
+  readonly config: readonly string[] | null;
+}
+
+async function assertSecurityInvariants(
+  client: pg.Client,
+  migrations: readonly MigrationFile[],
+): Promise<void> {
+  await assertRoleAttributes(client);
+  const { rows } = await client.query<InvariantsFunctionRow>(
+    `SELECT p.prosrc AS body, p.prosecdef AS security_definer,
+            pg_catalog.pg_get_userbyid(p.proowner) AS owner, l.lanname AS language,
+            p.proconfig AS config
+       FROM pg_catalog.pg_proc p
+       JOIN pg_catalog.pg_language l ON l.oid = p.prolang
+      WHERE p.oid = pg_catalog.to_regprocedure($1)`,
     [INVARIANTS_FUNCTION],
   );
-  if (rows[0]?.present !== true) {
+  const invariants = rows[0];
+  if (invariants === undefined) {
+    if (migrations.some((migration) => migration.tag === INVARIANTS_MIGRATION_TAG)) {
+      throw new MigrationError(
+        `função de invariantes ${INVARIANTS_FUNCTION} ausente depois das migrações (apagada ou ` +
+          'renomeada): o portão de segurança não pode ser desligado. Nada foi commitado.',
+      );
+    }
     return;
+  }
+  const bodyHash = createHash('sha256').update(invariants.body).digest('hex');
+  if (
+    bodyHash !== INVARIANTS_FUNCTION_SHA256 ||
+    invariants.security_definer ||
+    invariants.owner !== MIGRATION_OWNER_ROLE ||
+    invariants.language !== 'plpgsql' ||
+    !(invariants.config ?? []).some((setting) => setting.startsWith('search_path='))
+  ) {
+    throw new MigrationError(
+      `função de invariantes ${INVARIANTS_FUNCTION} foi alterada (corpo, dono, linguagem, ` +
+        'search_path ou SECURITY DEFINER diferente do esperado por src/migrate.ts). Se a mudança ' +
+        'é intencional, atualize INVARIANTS_FUNCTION_SHA256 no mesmo PR. Nada foi commitado.',
+    );
   }
   await assertCanAssumeOwner(client);
   await client.query(`SET LOCAL ROLE ${client.escapeIdentifier(MIGRATION_OWNER_ROLE)}`);
@@ -274,7 +359,7 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<Migr
         log(`aplicando ${migration.tag}${migration.privileged ? ' (privilegiada)' : ''}`);
         await applyMigration(client, migration);
       }
-      await assertSecurityInvariants(client);
+      await assertSecurityInvariants(client, migrations);
       await client.query('COMMIT');
 
       log(

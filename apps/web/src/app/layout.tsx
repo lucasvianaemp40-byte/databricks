@@ -12,7 +12,8 @@ const PRODUCT_DESCRIPTION =
 const isIndexable = env.APP_ENV === 'production';
 
 export const metadata: Metadata = {
-  metadataBase: new URL(env.NEXT_PUBLIC_APP_URL),
+  // APP_URL é lida em runtime: a origem é a da implantação, não a do `next build`.
+  metadataBase: new URL(env.APP_URL),
   title: {
     default: `${PRODUCT_NAME}: agendamento online para salões`,
     template: `%s | ${PRODUCT_NAME}`,

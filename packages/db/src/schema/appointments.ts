@@ -1,4 +1,4 @@
-import { APPOINTMENT_STATUSES } from '@salon/scheduling-core';
+import { APPOINTMENT_STATUSES, type ServicePhase } from '@salon/scheduling-core';
 import { sql } from 'drizzle-orm';
 import {
   boolean,
@@ -6,6 +6,7 @@ import {
   foreignKey,
   index,
   integer,
+  jsonb,
   smallint,
   text,
   timestamp,
@@ -16,6 +17,7 @@ import {
   appSchema,
   idColumn,
   instant,
+  instantHasMillisecondPrecision,
   matchesPattern,
   sqlStringList,
   tenantIdColumn,
@@ -39,15 +41,30 @@ import {
  * Status: a lista e a máquina de estados vêm do domínio (`@salon/scheduling-core`). O banco
  * repete as duas como defesa em profundidade: CHECK da coluna e trigger
  * `appointments_guard_status` (migração 0003), que também preenche os instantes de cada
- * transição e só permite nascer como `pending`/`confirmed`. Testes amarram banco e core. `version` é incrementada pelo banco a cada UPDATE (lock otimista:
+ * transição e só permite nascer como `pending`/`confirmed`. Testes amarram banco e core.
+ * `version` é incrementada pelo banco a cada UPDATE (lock otimista:
  * `UPDATE ... WHERE id = $1 AND version = $2`).
  *
- * `local_starts_at` + `timezone` guardam a hora de parede escolhida e o fuso IANA da unidade
- * no momento da reserva: são a fonte da verdade se a regra do fuso mudar (ex.: volta do
- * horário de verão), e um job recalcula `starts_at` dos agendamentos futuros.
+ * `local_starts_at` + `local_utc_offset_seconds` + `timezone` guardam a hora de parede
+ * escolhida, o offset UTC daquela ocorrência e o fuso IANA da unidade no momento da reserva.
+ * O offset distingue as duas ocorrências da hora repetida no fim do horário de verão (01:30
+ * -04:00 e 01:30 -05:00). CHECK `appointments_local_time_coherent`: hora de parede = instante
+ * + offset (truncada ao segundo), aritmética pura, sem depender do tzdata. O fuso precisa ser o
+ * da unidade (trigger `appointments_guard_location_timezone`, migração 0003).
+ * Se a regra do fuso mudar (volta do horário de verão), o recálculo planejado de `starts_at`
+ * (caminho privilegiado: a aplicação não altera o horário de uma visita) usa Temporal (`ZonedDateTime.from('<local><offset>[<fuso>]', { offset: 'prefer' })`) e uma
+ * política explícita para offset que deixou de valer; nunca `AT TIME ZONE` no SQL.
+ *
+ * Instantes de transição (`confirmed_at` ... `expired_at`) e `hold_expires_at` são do banco:
+ * o trigger `appointments_guard_status` ignora o valor enviado, grava `now()` na transição e
+ * só deixa o hold mudar enquanto o agendamento está `pending`.
  *
  * `idempotency_key` (header Idempotency-Key da criação) é única por tenant: repetir o
  * comando devolve 23505 em `appointments_tenant_idempotency_key_key`.
+ *
+ * Unidade, fuso, horário (instantes, hora de parede e offset) são imutáveis depois da criação:
+ * remarcar é criar outro agendamento (`rescheduled_from_id`). No COMMIT, os itens precisam
+ * caber na janela da visita.
  */
 export const appointments = appSchema.table(
   'appointments',
@@ -62,6 +79,8 @@ export const appointments = appSchema.table(
     endsAt: instant('ends_at').notNull(),
     /** Hora de parede escolhida ('YYYY-MM-DD HH:MM:SS', sem fuso). */
     localStartsAt: timestamp('local_starts_at', { mode: 'string' }).notNull(),
+    /** Offset UTC da hora de parede, em segundos (São Paulo: -10800). */
+    localUtcOffsetSeconds: integer('local_utc_offset_seconds').notNull(),
     /** Fuso IANA da unidade no momento da reserva. */
     timezone: text('timezone').notNull(),
     /** Validade do hold de um agendamento `pending` (obrigatória nesse status). */
@@ -109,7 +128,16 @@ export const appointments = appSchema.table(
     check('appointments_source_valid', sql`${t.source} IN (${sqlStringList(appointmentSources)})`),
     check('appointments_time_order', sql`${t.endsAt} > ${t.startsAt}`),
     check('appointments_max_length', sql`${t.endsAt} - ${t.startsAt} <= interval '24 hours'`),
+    check('appointments_instant_precision', instantHasMillisecondPrecision(t.startsAt, t.endsAt)),
     check('appointments_timezone_valid', sql`app_private.is_valid_iana_timezone(${t.timezone})`),
+    check(
+      'appointments_utc_offset_range',
+      sql`${t.localUtcOffsetSeconds} BETWEEN -64800 AND 64800`,
+    ),
+    check(
+      'appointments_local_time_coherent',
+      sql`${t.localStartsAt} = date_trunc('second', (${t.startsAt} AT TIME ZONE 'UTC') + make_interval(secs => ${t.localUtcOffsetSeconds}))`,
+    ),
     check(
       'appointments_pending_requires_hold',
       sql`${t.status} <> 'pending' OR ${t.holdExpiresAt} IS NOT NULL`,
@@ -128,8 +156,16 @@ export const appointments = appSchema.table(
 );
 
 /**
- * Item da visita: serviço x profissional, com SNAPSHOT de nome, duração, preço e comissão
- * (relatórios e comissões não mudam quando o catálogo muda).
+ * Item da visita: serviço x profissional, com SNAPSHOT de nome, duração, fases, buffers, preço
+ * e comissão (relatórios, comissões e a agenda não mudam quando o catálogo muda).
+ *
+ * `starts_at`/`ends_at` são a janela VISÍVEL do serviço (soma das fases = `duration_min`,
+ * CHECK `appointment_items_duration_coherent`); os buffers congelados ampliam a janela em que
+ * o profissional pode estar ocupado. No COMMIT, as ocupações `service` ativas do item precisam
+ * cobrir cada fase `work` (constraint trigger `appointment_items_occupancy_required`).
+ * Visita, profissional, horário, duração, fases e buffers do item são imutáveis, e um item com
+ * ocupação ativa não é apagado (trigger `appointment_items_guard_schedule`, migração 0003):
+ * remarcar é criar outro agendamento.
  */
 export const appointmentItems = appSchema.table(
   'appointment_items',
@@ -142,16 +178,28 @@ export const appointmentItems = appSchema.table(
     staffId: uuid('staff_id').notNull(),
     serviceName: text('service_name').notNull(),
     durationMin: smallint('duration_min').notNull(),
+    /** Fases congeladas (`ServicePhase` do core): as `work` precisam estar ocupadas. */
+    phases: jsonb('phases').$type<readonly ServicePhase[]>().notNull(),
     priceCents: integer('price_cents').notNull(),
     commissionBps: integer('commission_bps').notNull(),
+    /** Preparo antes do atendimento (minutos), congelado do serviço na reserva. */
+    bufferBeforeMin: smallint('buffer_before_min').notNull().default(0),
+    /** Limpeza depois do atendimento (minutos), congelado do serviço na reserva. */
+    bufferAfterMin: smallint('buffer_after_min').notNull().default(0),
     startsAt: instant('starts_at').notNull(),
     endsAt: instant('ends_at').notNull(),
     ...timestamps(),
   },
   (t) => [
     unique('appointment_items_tenant_id_id_key').on(t.tenantId, t.id),
-    // Alvo da FK das ocupações: garante que a ocupação aponta para um item DA MESMA visita.
-    unique('appointment_items_tenant_appointment_id_key').on(t.tenantId, t.appointmentId, t.id),
+    // Alvo da FK das ocupações: a ocupação aponta para um item DA MESMA visita e do MESMO
+    // profissional (staff_id da ocupação = staff_id do item).
+    unique('appointment_items_tenant_appointment_id_staff_key').on(
+      t.tenantId,
+      t.appointmentId,
+      t.id,
+      t.staffId,
+    ),
     unique('appointment_items_tenant_appointment_position_key').on(
       t.tenantId,
       t.appointmentId,
@@ -180,21 +228,42 @@ export const appointmentItems = appSchema.table(
       sql`char_length(${t.serviceName}) BETWEEN 1 AND 120`,
     ),
     check('appointment_items_duration_range', sql`${t.durationMin} BETWEEN 5 AND 720`),
+    check(
+      'appointment_items_phases_valid',
+      sql`app_private.service_phases_are_valid(${t.phases}, ${t.durationMin})`,
+    ),
+    check(
+      'appointment_items_duration_coherent',
+      sql`${t.endsAt} - ${t.startsAt} = make_interval(mins => ${t.durationMin})`,
+    ),
     check('appointment_items_price_range', sql`${t.priceCents} BETWEEN 0 AND 100000000`),
     check('appointment_items_commission_range', sql`${t.commissionBps} BETWEEN 0 AND 10000`),
     check('appointment_items_time_order', sql`${t.endsAt} > ${t.startsAt}`),
+    check(
+      'appointment_items_instant_precision',
+      instantHasMillisecondPrecision(t.startsAt, t.endsAt),
+    ),
+    check('appointment_items_buffer_before_range', sql`${t.bufferBeforeMin} BETWEEN 0 AND 240`),
+    check('appointment_items_buffer_after_range', sql`${t.bufferAfterMin} BETWEEN 0 AND 240`),
   ],
 );
 
 /**
- * Intervalo em que um profissional está ocupado por um item (uma linha por fase ocupada e por
- * buffer). A garantia anti-overbooking é do BANCO: EXCLUDE `occupancies_no_staff_overlap`
- * (tenant_id =, staff_id =, during &&) WHERE active (migração 0003). Dois commits concorrentes
- * no mesmo horário: um recebe 23P01 (`SlotUnavailableError`).
+ * Intervalo em que um profissional está ocupado por um item (uma linha por trecho ocupado:
+ * `service` contém fase de trabalho, `buffer` é só preparo/limpeza). A garantia
+ * anti-overbooking é do BANCO: EXCLUDE `occupancies_no_staff_overlap` (tenant_id =,
+ * staff_id =, during &&) WHERE active (migração 0003). Dois commits concorrentes no mesmo
+ * horário: um recebe 23P01 (`SlotUnavailableError`).
  *
- * `active` é DERIVADA do status do agendamento pelo trigger `occupancies_derive_active`:
- * o valor enviado pela aplicação é ignorado (cancelar, no-show e expirar liberam o horário;
- * reativar re-checa o EXCLUDE).
+ * Para o EXCLUDE valer, a ocupação não pode ser escondida nem desalinhada:
+ * - `active` é DERIVADA do status do agendamento (trigger `occupancies_derive_active`): o
+ *   valor enviado é ignorado (cancelar, no-show e expirar liberam; reativar re-checa o EXCLUDE);
+ * - FK composta com o item inclui `staff_id`: a ocupação é do profissional do item;
+ * - trigger `occupancies_guard_within_item`: o trecho cabe na janela do item ampliada pelos
+ *   buffers congelados, e `service` toca a janela visível;
+ * - a aplicação só faz INSERT e UPDATE de `active` (sem DELETE nem UPDATE de outras colunas);
+ * - constraint trigger adiada `appointments_occupancy_required`: no COMMIT, todo item de
+ *   agendamento que ocupa a agenda tem ao menos uma ocupação `service` ativa.
  */
 export const occupancies = appSchema.table(
   'occupancies',
@@ -221,11 +290,12 @@ export const occupancies = appSchema.table(
     ),
     foreignKey({
       name: 'occupancies_appointment_item_fk',
-      columns: [t.tenantId, t.appointmentId, t.appointmentItemId],
+      columns: [t.tenantId, t.appointmentId, t.appointmentItemId, t.staffId],
       foreignColumns: [
         appointmentItems.tenantId,
         appointmentItems.appointmentId,
         appointmentItems.id,
+        appointmentItems.staffId,
       ],
     }).onDelete('cascade'),
     foreignKey({
@@ -236,6 +306,7 @@ export const occupancies = appSchema.table(
     check('occupancies_kind_valid', sql`${t.kind} IN (${sqlStringList(occupancyKinds)})`),
     check('occupancies_time_order', sql`${t.endsAt} > ${t.startsAt}`),
     check('occupancies_max_length', sql`${t.endsAt} - ${t.startsAt} <= interval '24 hours'`),
+    check('occupancies_instant_precision', instantHasMillisecondPrecision(t.startsAt, t.endsAt)),
   ],
 );
 

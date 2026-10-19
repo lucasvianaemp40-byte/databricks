@@ -2,7 +2,8 @@
 #
 # Cada unidade (location) tem fuso IANA próprio. Horário de parede sai de Temporal com o fuso da
 # unidade ou de Intl.DateTimeFormat com `timeZone` explícito; nunca dos getters locais de Date,
-# de toLocale*String sem `timeZone`, nem de new Date(ano, mês, ...) (interpreta no fuso local).
+# de toLocale*String sem `timeZone`, de new Date(ano, mês, ...) nem de new Date/Date.parse com
+# texto de data-hora sem Z/offset ('2026-10-17T10:00'): os dois interpretam no fuso local.
 rules:
   - id: server-timezone-date
     languages: [typescript, javascript]
@@ -54,6 +55,19 @@ rules:
           - pattern-not: 'Intl.DateTimeFormat($LOCALE, {..., timeZone: $TZ, ...})'
       # Construtor com componentes interpreta no fuso local.
       - pattern: new Date($YEAR, $MONTH, ...)
+      # Data-hora em texto sem Z/offset também é interpretada no fuso local (ECMA-262, Date
+      # Time String Format). Só data ('2026-10-17') é UTC e fica de fora. O ramo `[^`]*` cobre
+      # template literal, inclusive dinâmico (`${data}T10:00`), que o semgrep liga sem a crase
+      # final. Mesma expressão do FLOATING_DATE_TIME do eslint.base.mjs: o V8 também lê no fuso
+      # local o 't' minúsculo e o ano expandido ('+002026-10-17T10:00'). O ESLint é mais amplo
+      # (proíbe qualquer Date.parse, inclusive em teste); aqui só o texto sem offset.
+      - patterns:
+          - pattern-either:
+              - pattern: new Date($S)
+              - pattern: Date.parse($S)
+          - metavariable-regex:
+              metavariable: $S
+              regex: ^(['"][+-]?\d{4,6}-\d{2}-\d{2}|`[^`]*)[Tt ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?['"`]?$
     metadata:
       category: correctness
       subcategory: [audit]

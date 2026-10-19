@@ -198,6 +198,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "phases": {
+          "name": "phases",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
         "price_cents": {
           "name": "price_cents",
           "type": "integer",
@@ -209,6 +215,20 @@
           "type": "integer",
           "primaryKey": false,
           "notNull": true
+        },
+        "buffer_before_min": {
+          "name": "buffer_before_min",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "buffer_after_min": {
+          "name": "buffer_after_min",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "starts_at": {
           "name": "starts_at",
@@ -347,13 +367,14 @@
             "id"
           ]
         },
-        "appointment_items_tenant_appointment_id_key": {
-          "name": "appointment_items_tenant_appointment_id_key",
+        "appointment_items_tenant_appointment_id_staff_key": {
+          "name": "appointment_items_tenant_appointment_id_staff_key",
           "nullsNotDistinct": false,
           "columns": [
             "tenant_id",
             "appointment_id",
-            "id"
+            "id",
+            "staff_id"
           ]
         },
         "appointment_items_tenant_appointment_position_key": {
@@ -380,6 +401,14 @@
           "name": "appointment_items_duration_range",
           "value": "\"app\".\"appointment_items\".\"duration_min\" BETWEEN 5 AND 720"
         },
+        "appointment_items_phases_valid": {
+          "name": "appointment_items_phases_valid",
+          "value": "app_private.service_phases_are_valid(\"app\".\"appointment_items\".\"phases\", \"app\".\"appointment_items\".\"duration_min\")"
+        },
+        "appointment_items_duration_coherent": {
+          "name": "appointment_items_duration_coherent",
+          "value": "\"app\".\"appointment_items\".\"ends_at\" - \"app\".\"appointment_items\".\"starts_at\" = make_interval(mins => \"app\".\"appointment_items\".\"duration_min\")"
+        },
         "appointment_items_price_range": {
           "name": "appointment_items_price_range",
           "value": "\"app\".\"appointment_items\".\"price_cents\" BETWEEN 0 AND 100000000"
@@ -391,6 +420,18 @@
         "appointment_items_time_order": {
           "name": "appointment_items_time_order",
           "value": "\"app\".\"appointment_items\".\"ends_at\" > \"app\".\"appointment_items\".\"starts_at\""
+        },
+        "appointment_items_instant_precision": {
+          "name": "appointment_items_instant_precision",
+          "value": "date_trunc('milliseconds', \"app\".\"appointment_items\".\"starts_at\") = \"app\".\"appointment_items\".\"starts_at\" AND date_trunc('milliseconds', \"app\".\"appointment_items\".\"ends_at\") = \"app\".\"appointment_items\".\"ends_at\""
+        },
+        "appointment_items_buffer_before_range": {
+          "name": "appointment_items_buffer_before_range",
+          "value": "\"app\".\"appointment_items\".\"buffer_before_min\" BETWEEN 0 AND 240"
+        },
+        "appointment_items_buffer_after_range": {
+          "name": "appointment_items_buffer_after_range",
+          "value": "\"app\".\"appointment_items\".\"buffer_after_min\" BETWEEN 0 AND 240"
         }
       },
       "isRLSEnabled": false
@@ -452,6 +493,12 @@
         "local_starts_at": {
           "name": "local_starts_at",
           "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "local_utc_offset_seconds": {
+          "name": "local_utc_offset_seconds",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -714,9 +761,21 @@
           "name": "appointments_max_length",
           "value": "\"app\".\"appointments\".\"ends_at\" - \"app\".\"appointments\".\"starts_at\" <= interval '24 hours'"
         },
+        "appointments_instant_precision": {
+          "name": "appointments_instant_precision",
+          "value": "date_trunc('milliseconds', \"app\".\"appointments\".\"starts_at\") = \"app\".\"appointments\".\"starts_at\" AND date_trunc('milliseconds', \"app\".\"appointments\".\"ends_at\") = \"app\".\"appointments\".\"ends_at\""
+        },
         "appointments_timezone_valid": {
           "name": "appointments_timezone_valid",
           "value": "app_private.is_valid_iana_timezone(\"app\".\"appointments\".\"timezone\")"
+        },
+        "appointments_utc_offset_range": {
+          "name": "appointments_utc_offset_range",
+          "value": "\"app\".\"appointments\".\"local_utc_offset_seconds\" BETWEEN -64800 AND 64800"
+        },
+        "appointments_local_time_coherent": {
+          "name": "appointments_local_time_coherent",
+          "value": "\"app\".\"appointments\".\"local_starts_at\" = date_trunc('second', (\"app\".\"appointments\".\"starts_at\" AT TIME ZONE 'UTC') + make_interval(secs => \"app\".\"appointments\".\"local_utc_offset_seconds\"))"
         },
         "appointments_pending_requires_hold": {
           "name": "appointments_pending_requires_hold",
@@ -866,12 +925,14 @@
           "columnsFrom": [
             "tenant_id",
             "appointment_id",
-            "appointment_item_id"
+            "appointment_item_id",
+            "staff_id"
           ],
           "columnsTo": [
             "tenant_id",
             "appointment_id",
-            "id"
+            "id",
+            "staff_id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
@@ -908,6 +969,10 @@
         "occupancies_max_length": {
           "name": "occupancies_max_length",
           "value": "\"app\".\"occupancies\".\"ends_at\" - \"app\".\"occupancies\".\"starts_at\" <= interval '24 hours'"
+        },
+        "occupancies_instant_precision": {
+          "name": "occupancies_instant_precision",
+          "value": "date_trunc('milliseconds', \"app\".\"occupancies\".\"starts_at\") = \"app\".\"occupancies\".\"starts_at\" AND date_trunc('milliseconds', \"app\".\"occupancies\".\"ends_at\") = \"app\".\"occupancies\".\"ends_at\""
         }
       },
       "isRLSEnabled": false
@@ -1043,6 +1108,10 @@
         "time_off_order": {
           "name": "time_off_order",
           "value": "\"app\".\"time_off\".\"ends_at\" > \"app\".\"time_off\".\"starts_at\""
+        },
+        "time_off_instant_precision": {
+          "name": "time_off_instant_precision",
+          "value": "date_trunc('milliseconds', \"app\".\"time_off\".\"starts_at\") = \"app\".\"time_off\".\"starts_at\" AND date_trunc('milliseconds', \"app\".\"time_off\".\"ends_at\") = \"app\".\"time_off\".\"ends_at\""
         },
         "time_off_max_length": {
           "name": "time_off_max_length",
@@ -1198,6 +1267,10 @@
         "working_hours_time_order": {
           "name": "working_hours_time_order",
           "value": "\"app\".\"working_hours\".\"end_time\" > \"app\".\"working_hours\".\"start_time\""
+        },
+        "working_hours_whole_minutes": {
+          "name": "working_hours_whole_minutes",
+          "value": "extract(second FROM \"app\".\"working_hours\".\"start_time\") = 0 AND extract(second FROM \"app\".\"working_hours\".\"end_time\") = 0"
         },
         "working_hours_validity_order": {
           "name": "working_hours_validity_order",

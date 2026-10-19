@@ -1,0 +1,15 @@
+// Módulos de teste compartilhados pelos pacotes (hoje, o reporter do portão pelo resultado).
+// Ficam fora de qualquer pacote, onde só as dependências da raiz resolvem: nada de importar
+// `vitest` aqui. Este tsconfig serve ao editor e ao projectService do ESLint; a conferência
+// contra os tipos reais do Vitest acontece no `tsc` de cada pacote que importa o módulo.
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "*.ts"
+  ]
+}

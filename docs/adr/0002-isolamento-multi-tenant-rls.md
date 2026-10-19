@@ -38,9 +38,15 @@ Fatos verificados na documentação do PostgreSQL ("Row Security Policies", `CRE
 da aplicação.
 
 1. **Contexto por transação:** `withTenant(db, tenantId, fn, { actor })` é a única porta para
-   dado de tenant. Valida o UUID, abre a transação e faz `set_config('app.tenant_id', id,
-   true)`, fixando também `TimeZone=UTC` e o ator da auditoria. O `tenantId` vem só da sessão
-   no servidor.
+   dado de tenant. Valida o UUID, abre a transação em READ COMMITTED (fixo, vence o padrão do
+   banco, do papel ou da URL) e faz `set_config('app.tenant_id', id, true)`, fixando também
+   `TimeZone=UTC` e o ator da auditoria. O `tenantId` vem só da sessão no servidor. O `tx` só
+   vale enquanto `fn` executa: `withTenant` embrulha a conexão, e depois do callback só passam
+   COMMIT e ROLLBACK; qualquer outra consulta é recusada com `TransactionClosedError` sem tocar
+   no banco, e a conexão com transação sem desfecho limpo, com consulta ainda em voo ou que
+   emitiu erro é destruída em vez de voltar ao pool. Enquanto emprestada, a conexão tem um
+   ouvinte de `error`, para que uma queda no meio do callback falhe a transação em vez de
+   derrubar o processo.
 2. **RLS `ENABLE` + `FORCE`** em toda tabela com `tenant_id` e em `tenants`:
    - `tenant_isolation`: `AS RESTRICTIVE FOR ALL TO PUBLIC`, com
      `tenant_id = (SELECT NULLIF(current_setting('app.tenant_id', true), '')::uuid)`. O
@@ -50,20 +56,49 @@ da aplicação.
    - `app_migrator` é `NOLOGIN` e dono de tudo. O runner assume esse papel com
      `SET LOCAL ROLE`.
    - `app_user` (web) e `app_worker` (jobs) são `LOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT`,
-     não são donos e não têm `TRUNCATE`, `REFERENCES` nem `TRIGGER`. O `app_worker` só lê e
-     altera status.
+     não são donos e não têm `TRUNCATE`, `REFERENCES` nem `TRIGGER`.
+   - O `app_worker` lê o tenant do job e só tem UPDATE de duas colunas, por GRANT de coluna:
+     `appointments.status` e `occupancies.active` (que um trigger recalcula a partir do status).
+     Não tem INSERT, DELETE nem UPDATE de tabela inteira. Job novo que precise escrever outra
+     coluna ganha GRANT de coluna explícito numa migração nova e o ajuste correspondente em
+     `assert_security_invariants()`, que hoje recusa qualquer outro privilégio de escrita do
+     worker.
    - Nenhuma senha fica no repositório.
 4. **Integridade cross-tenant:** FKs compostas `(tenant_id, x_id) → (tenant_id, id)` e toda
-   UNIQUE e todo EXCLUDE começando por `tenant_id`.
+   UNIQUE de negócio e todo EXCLUDE começando por `tenant_id`. Exceção consciente: a PK `id` é
+   global. Um `id` que já existe em outro tenant devolve 23505 mesmo com a RLS escondendo a
+   linha; isso não vaza nada porque o id nasce no servidor (UUIDv7) e nunca muda, e o
+   `@salon/db` traduz o erro para `IdentifierConflictError`, respondido como 404/409 genérico.
+   A PK não vira `(tenant_id, id)` para que um id nunca se repita entre salões.
 5. **Invariantes no deploy:** `app_private.assert_security_invariants()` roda ao fim de toda
-   execução do runner e desfaz a migração se encontrar:
-   - tabela com `tenant_id` sem RLS, sem `FORCE` ou sem política RESTRICTIVE;
-   - papel com `SUPERUSER` ou `BYPASSRLS`;
-   - papel de runtime membro de outro papel;
-   - objeto que não pertence a `app_migrator`;
-   - privilégio fora de SELECT, INSERT, UPDATE e DELETE;
-   - função `SECURITY DEFINER` executável pela aplicação;
-   - view sem `security_invoker`.
+   execução do runner, que antes confere o hash do corpo dela e falha se ela sumir, for
+   renomeada ou esvaziada. Nada é commitado se, em qualquer schema de usuário (escopo completo
+   em [packages/db/README.md](../../packages/db/README.md#segurança-multi-tenant-defesa-em-profundidade),
+   item 4):
+   - tabela com `tenant_id` (ou `app.tenants`) estiver sem RLS, sem `FORCE` ou sem a política
+     RESTRICTIVE **canônica** (FOR ALL, TO PUBLIC, mesma expressão no USING e no WITH CHECK);
+   - papel `app_*` tiver `SUPERUSER`, `BYPASSRLS`, `CREATEROLE`, `CREATEDB` ou `REPLICATION`,
+     for membro de outro papel, ou `app_migrator` tiver LOGIN ou INHERIT;
+   - objeto (relação, função, tipo ou schema) não pertencer a `app_migrator`;
+   - houver privilégio de PUBLIC em tabela, privilégio de runtime fora de SELECT, INSERT,
+     UPDATE e DELETE, escrita do `app_worker` além do GRANT de coluna, escrita da aplicação na
+     auditoria, DELETE de agendamento ou DELETE/UPDATE (fora de `active`) de ocupação;
+   - função `SECURITY DEFINER` estiver sem `search_path` fixo terminado em `pg_temp` ou for
+     executável por PUBLIC ou pela aplicação fora da lista `executable_definers` (hoje vazia);
+   - view estiver sem `security_invoker`, ou houver materialized view ou foreign table legível
+     pela aplicação;
+   - PUBLIC tiver USAGE ou CREATE em `app`/`app_private`, ou um papel de runtime tiver CREATE
+     em schema ou no banco;
+   - faltar ou estiver desligado um trigger crítico ou um EXCLUDE anti-sobreposição, ou um
+     trigger crítico for recriado com definição diferente da esperada, lida de `pg_trigger`:
+     constraint trigger ou não, momento, eventos e colunas do `UPDATE OF`, adiamento até o
+     COMMIT, nível, presença de `WHEN`, número de argumentos e função (recriar a completude do
+     item como `AFTER UPDATE`, por exemplo, é recusado). Essa comparação só foi validada no
+     PostgreSQL 16.15; se o 18 do CI divergir, o `pnpm test:db` falha fechado.
+
+   O portão pega erro honesto e drift (mudança manual no banco). Não pega migração maliciosa:
+   quem migra é dono de tudo. Para isso valem a revisão de migração e os meta-testes do
+   `pnpm test:db`.
 6. **Auditoria append-only:** `appointment_events` é escrita só por trigger
    `SECURITY DEFINER`. A aplicação só lê, e UPDATE, DELETE e TRUNCATE falham até para o dono.
 7. **Respostas:** recurso de outro tenant responde 404, e `TenantIsolationError` (`42501`)
@@ -75,6 +110,15 @@ da aplicação.
   - um bug de autorização na aplicação não basta para vazar dados entre salões;
   - o deploy falha se a segurança do banco regredir;
   - os testes provam o isolamento contra PostgreSQL real, com papéis reais (`pnpm test:db`).
+- **O que a RLS cobre e o que não cobre:**
+  - cobre o filtro esquecido (`SELECT` sem `WHERE tenant_id`) e o id de outro tenant vindo da
+    requisição: a linha não aparece, e INSERT ou UPDATE com tenant alheio falham;
+  - **não** cobre o tenant errado posto no contexto: se o servidor passar a `withTenant` o
+    tenant de outra pessoa, a RLS obedece. Por isso o `tenantId` sai só da sessão, depois da
+    membership verificada (DAL);
+  - **não** cobre um `tx` usado depois do callback: a consulta atrasada rodaria na transação
+    de outra requisição, com o tenant dela, e a RLS não teria como perceber. Quem bloqueia
+    isso é a guarda de `withTenant` (`TransactionClosedError`), não a RLS.
 - **Negativas e riscos:**
   - **Qualquer sessão pode chamar `set_config`.** Uma injeção de SQL troca de tenant.
     Mitigação: SQL parametrizado, `sql.raw` só com constantes (regra Semgrep

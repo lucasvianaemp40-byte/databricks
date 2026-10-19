@@ -1,6 +1,8 @@
-# OSV-Scanner (security.yml, passado com --config). Espelha o `audit.ignore` do
-# pnpm-workspace.yaml: todo risco aceito aparece nos DOIS lugares, com a mesma justificativa
-# e prazo de revisão. Ao vencer o `ignoreUntil`, o scan volta a falhar e obriga a reavaliar.
+# OSV-Scanner (job `osv` do security.yml, via .github/scripts/osv-gate.sh, que passa este
+# arquivo com --config nas varreduras do head e da base do PR). Espelha o `audit.ignore` do
+# pnpm-workspace.yaml e o `allow-ghsas` do dependency-review: todo risco aceito aparece nos TRÊS
+# lugares, com a mesma justificativa e prazo de revisão. Ao vencer o `ignoreUntil`, o scan volta
+# a falhar e obriga a reavaliar.
 
 [[IgnoredVulns]]
 id = "GHSA-vfj7-8cjw-p6xm"

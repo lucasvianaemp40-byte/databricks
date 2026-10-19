@@ -68,7 +68,9 @@
       },
       "suspicious": {
         "noImportCycles": "error",
-        "noExplicitAny": "error"
+        "noExplicitAny": "error",
+        "noSkippedTests": "error",
+        "noFocusedTests": "error"
       },
       "correctness": {
         "noUnusedImports": "error",
@@ -82,6 +84,25 @@
       }
     }
   },
+  "plugins": [
+    {
+      "path": "./biome-plugins/no-disabled-tests.grit",
+      "includes": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.test.mts",
+        "**/*.test.js",
+        "**/*.test.mjs",
+        "**/*.test.cjs",
+        "**/*.spec.ts",
+        "**/*.spec.tsx",
+        "**/*.spec.mjs",
+        "**/test/**",
+        "**/test-support/**",
+        "**/e2e/**"
+      ]
+    }
+  ],
   "overrides": [
     {
       "includes": [

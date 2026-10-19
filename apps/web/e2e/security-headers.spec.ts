@@ -32,6 +32,34 @@ function nonceOf(response: APIResponse): string {
   return nonce ?? '';
 }
 
+/** Documento HTML com CSP na resposta e o nonce dela em todos os <script>. */
+async function expectDocumentUnderCsp(response: APIResponse): Promise<void> {
+  expect(header(response, 'content-type')).toContain('text/html');
+  const nonce = nonceOf(response);
+  const scripts = (await response.text()).match(/<script\b[^>]*>/g) ?? [];
+  expect(scripts.length, 'scripts do Next no documento').toBeGreaterThan(0);
+  for (const tag of scripts) {
+    expect(tag).toContain(`nonce="${nonce}"`);
+  }
+}
+
+/**
+ * Caminhos que o matcher antigo do Proxy deixava sem CSP: exclusão por prefixo solto
+ * (`_next/static`, `_next/image`) e '.' sem escape em `favicon.ico`. Todos respondem a página
+ * 404 do app, com os scripts do Next. Um slug de salão com esses prefixos (página pública
+ * /[slug]) cairia no mesmo caso.
+ */
+const PATHS_FORMERLY_WITHOUT_PROXY = [
+  '/favicon.ico',
+  '/favicon.ico.bak',
+  '/faviconXico',
+  '/favicon-ico-x',
+  '/_next/static',
+  '/_next/staticX',
+  '/_next/static-evil/page',
+  '/_next/imagefoo',
+];
+
 const STATIC_HEADERS: Readonly<Record<string, string>> = {
   'strict-transport-security': 'max-age=63072000; includeSubDomains',
   'x-content-type-options': 'nosniff',
@@ -94,6 +122,74 @@ test.describe('Content-Security-Policy', () => {
     expect(nonce).not.toBe(forgedNonce);
     expect(await response.text()).not.toContain(forgedNonce);
   });
+});
+
+test.describe('cobertura do Proxy', () => {
+  for (const path of PATHS_FORMERLY_WITHOUT_PROXY) {
+    test(`a página 404 em ${path} sai com CSP e nonce em todos os <script>`, async ({
+      request,
+    }) => {
+      const response = await request.get(path);
+      expect(response.status()).toBe(404);
+      await expectDocumentUnderCsp(response);
+    });
+  }
+
+  test('ignora nonce e CSP forjados também fora das rotas do app', async ({ request }) => {
+    const forgedNonce = `${'A'.repeat(22)}==`;
+    const response = await request.get('/favicon.ico.bak', {
+      headers: { 'content-security-policy': `script-src 'nonce-${forgedNonce}'` },
+    });
+    expect(nonceOf(response)).not.toBe(forgedNonce);
+    expect(await response.text()).not.toContain(forgedNonce);
+  });
+
+  // Cabeçalhos de prefetch são controlados pelo cliente: não podem tirar a CSP do HTML.
+  for (const [name, value] of [
+    ['next-router-prefetch', '1'],
+    ['next-router-prefetch', 'qualquer-valor'],
+    ['purpose', 'prefetch'],
+  ] as const) {
+    test(`o HTML pedido com ${name}: ${value} sai com CSP`, async ({ request }) => {
+      const response = await request.get('/', { headers: { [name]: value } });
+      expect(response.status()).toBe(200);
+      await expectDocumentUnderCsp(response);
+    });
+  }
+});
+
+test.describe('otimizador de imagens', () => {
+  test('/_next/image está desligado: 404 com a página do app, sob CSP', async ({ request }) => {
+    // Com o otimizador ligado, o Next buscaria "/" internamente e responderia 400.
+    const response = await request.get('/_next/image', {
+      params: { url: '/', w: '64', q: '75' },
+    });
+    expect(response.status()).toBe(404);
+    await expectDocumentUnderCsp(response);
+  });
+});
+
+test.describe('método TRACE', () => {
+  // O adaptador do Proxy no Next 16.4 não monta um Request com TRACE (o Fetch o proíbe) e
+  // responde 500 sem os cabeçalhos estáticos, antes de proxy() rodar; o bloqueio com 405 é
+  // da borda (ver README). Aqui fica o mínimo que o app garante: nada da requisição ecoado
+  // (Cross-Site Tracing) e nenhum detalhe interno no corpo.
+  for (const path of ['/', '/api/health']) {
+    test(`TRACE em ${path} não ecoa a requisição nem vaza stack`, async ({ request }) => {
+      const marker = `sonda-trace-${crypto.randomUUID()}`;
+      const response = await request.fetch(path, {
+        method: 'TRACE',
+        headers: { 'x-sonda-trace': marker, cookie: `sonda=${marker}` },
+      });
+      const body = await response.text();
+
+      expect(body).not.toContain(marker);
+      expect(body).not.toContain('TypeError');
+      expect(body).not.toMatch(/\n\s+at /);
+      expect(body).not.toContain('.next/');
+      expect(body).not.toContain('chunks/');
+    });
+  }
 });
 
 test.describe('cabeçalhos estáticos', () => {

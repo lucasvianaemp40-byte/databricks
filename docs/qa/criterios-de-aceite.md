@@ -32,7 +32,10 @@ testes.
 - [ ] Efeitos colaterais (jobs, mensagens) na mesma transação ou idempotentes
 
 **Multi-tenant e autorização**
-- [ ] tenantId só da sessão; nenhum campo de tenant, papel, preço ou status aceito do cliente
+- [ ] tenantId só da sessão; nenhum campo de tenant, papel, preço, status ou `id` aceito do
+      cliente
+- [ ] Todo acesso a dado termina dentro do callback de `withTenant` (sem `after()`, `setTimeout`
+      ou builder devolvido)
 - [ ] Teste negativo: tenant B não lê nem altera dado do tenant A (UI, action, URL direta → 404)
 - [ ] Papéis: matriz atualizada (anônimo, cliente, profissional, recepção, dono) com casos
       positivos e negativos
@@ -50,7 +53,8 @@ testes.
 - [ ] Zod estrito em toda entrada; erro genérico sem eco de dado pessoal
 - [ ] Autorização dentro da Server Action ou do Route Handler (o Proxy não autoriza)
 - [ ] Route Handler mutável com assertSameOrigin ou assinatura (webhook)
-- [ ] Rate limit e anti-automação em fluxo público ou caro (falha fechada)
+- [ ] Rate limit e anti-automação em fluxo público ou caro (falha fechada); intervalo de
+      consulta limitado no servidor (disponibilidade: no máximo 31 dias)
 - [ ] Sem dangerouslySetInnerHTML, sem atributo style inline, sem sql.raw com input
 - [ ] Threat model atualizado se tocar dado pessoal, pagamento, autenticação ou página pública
 
@@ -73,7 +77,7 @@ testes.
 - [ ] Banco: integração e RLS (*.int.test.ts, *.rls.test.ts) se mexeu em SQL ou acesso a dados
 - [ ] E2E da jornada (*.spec.ts) com axe, se mexeu em UI
 - [ ] Teste de regressão que falhava antes da correção (se for bug)
-- [ ] pnpm verify verde; pnpm test:db e pnpm e2e quando aplicável
+- [ ] pnpm verify verde (inclui o knip); pnpm test:db e pnpm e2e quando aplicável
 ```
 
 ## Exemplo preenchido (trecho): E4.3 "Confirmar agendamento pela página pública"

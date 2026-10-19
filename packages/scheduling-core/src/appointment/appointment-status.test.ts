@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { EXPECTED_TRANSITIONS as EXPECTED } from '../../test/support/appointment-transitions';
 import {
   APPOINTMENT_STATUSES,
   type AppointmentStatus,
@@ -12,25 +13,8 @@ import {
   transitionAppointmentStatus,
 } from './appointment-status';
 
-// Tabela explícita (documentação viva). Espelha o guard de status do banco.
-const EXPECTED: Record<AppointmentStatus, readonly AppointmentStatus[]> = {
-  pending: ['confirmed', 'cancelled_by_customer', 'cancelled_by_salon', 'expired'],
-  confirmed: [
-    'checked_in',
-    'in_service',
-    'completed',
-    'cancelled_by_customer',
-    'cancelled_by_salon',
-    'no_show',
-  ],
-  checked_in: ['in_service', 'completed', 'cancelled_by_customer', 'cancelled_by_salon'],
-  in_service: ['completed'],
-  completed: [],
-  cancelled_by_customer: [],
-  cancelled_by_salon: [],
-  no_show: ['checked_in'],
-  expired: ['confirmed'],
-};
+// Tabela explícita (documentação viva) em test/support: espelha o guard de status do banco
+// e também é o oráculo das propriedades.
 
 const ALL_PAIRS = APPOINTMENT_STATUSES.flatMap((from) =>
   APPOINTMENT_STATUSES.map((to) => [from, to] as const),

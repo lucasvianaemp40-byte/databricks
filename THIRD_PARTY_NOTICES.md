@@ -106,7 +106,7 @@ valem só para os arquivos listados.
 
 | Arquivo | Origem | Alterações |
 | --- | --- | --- |
-| `.claude/skills/ms-playwright-cli/SKILL.md` | `skills/playwright-cli/SKILL.md` | nome com prefixo; comando local em vez do binário global; seção de instalação substituída (sem npm -g/npx, sem attach ao navegador pessoal); allowed-tools restrito; referências não vendorizadas removidas |
+| `.claude/skills/ms-playwright-cli/SKILL.md` | `skills/playwright-cli/SKILL.md` | nome com prefixo; comando local em vez do binário global; seção de instalação substituída (sem npm -g/npx, sem attach ao navegador pessoal); allowed-tools removido (nada pré-aprovado); referências não vendorizadas removidas |
 | `.claude/skills/ms-playwright-cli/references/element-attributes.md` | `skills/playwright-cli/references/element-attributes.md` | comando local nos blocos de código |
 | `.claude/skills/ms-playwright-cli/references/request-mocking.md` | `skills/playwright-cli/references/request-mocking.md` | comando local nos blocos de código |
 | `.claude/skills/ms-playwright-cli/references/storage-state.md` | `skills/playwright-cli/references/storage-state.md` | comando local nos blocos de código |

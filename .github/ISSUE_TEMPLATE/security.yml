@@ -10,7 +10,8 @@ body:
 
         Issues são públicas. Para relatar falha de segurança ou exposição de dados pessoais,
         use o **relato privado de vulnerabilidade** do GitHub (aba Security > "Report a
-        vulnerability") ou o e-mail indicado no [SECURITY.md](../blob/main/SECURITY.md).
+        vulnerability", ou [este link](../security/advisories/new)), o único canal oficial
+        segundo a [política de segurança](../security/policy).
 
         Use este formulário apenas para pedir um canal de contato ou para sugestões de
         endurecimento que não exponham uma falha explorável.

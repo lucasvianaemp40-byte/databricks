@@ -44,13 +44,13 @@ Coluna "Onde": **db** = schema `app` de `@salon/db`; **core** = `@salon/scheduli
 | Termo (pt-BR) | Identificador | Onde | Definição |
 |---|---|---|---|
 | Agendamento (visita) | `appointments` | db | uma ida do cliente ao salão; pode ter vários serviços e profissionais |
-| Item do agendamento | `appointment_items` (`position`, `service_name`, `price_cents`, `commission_bps`) | db | serviço × profissional com preço e comissão **congelados** (snapshot) |
-| Ocupação | `occupancies` (`kind`: `service` ou `buffer`; `active`) | db | intervalo em que o profissional está ocupado. É o alvo do `EXCLUDE` anti-overbooking. `active` é **derivada do status** |
+| Item do agendamento | `appointment_items` (`position`, `service_name`, `price_cents`, `commission_bps`, `phases`, `buffer_before_min`, `buffer_after_min`) | db | serviço × profissional com preço, comissão, duração, fases e buffers **congelados** (snapshot). Profissional, horário, duração, fases e buffers são imutáveis |
+| Ocupação | `occupancies` (`kind`: `service` ou `buffer`; `active`) / `OccupancySegment`, `staffOccupancySegments` | db, core | intervalo em que o profissional está ocupado, amarrado ao item. Uma linha por fase de trabalho (`service`) e uma por buffer (`buffer`). É o alvo do `EXCLUDE` anti-overbooking. `active` é **derivada do status** |
 | Status | `status` / `AppointmentStatus` | db, core | ver a tabela abaixo |
 | Origem | `appointments.source`: `online`, `staff`, `walk_in` (chegou sem hora marcada) | db | canal de criação |
 | Hold, reserva temporária | `hold_expires_at` | db | prazo de um agendamento `pending` (sinal ou aprovação). Expirado, vira `expired` |
 | Sinal | `deposit` | planejado | valor pago via Pix para garantir o horário; **sempre abate** do total |
-| Remarcação | `rescheduled_from_id` | db | remarcar cria **outro** agendamento ligado ao original |
+| Remarcação | `rescheduled_from_id` | db | remarcar cria **outro** agendamento ligado ao original. Mover o horário também é remarcar: visita e item são imutáveis |
 | Chave de idempotência | `idempotency_key` (única por tenant) | db | evita agendamento duplicado por reenvio do formulário |
 | Versão | `version` | db | lock otimista: todo UPDATE incrementa |
 | Evento de auditoria | `appointment_events` (`event_type`: `created`, `status_changed`) | db | trilha append-only escrita por trigger |
@@ -96,7 +96,8 @@ exaustivos em relação ao core. As transições estão em [modelo.md](modelo.md
 |---|---|---|---|
 | Instante | `Temporal.Instant`, `timestamptz` | core, db | ponto absoluto na linha do tempo (UTC) |
 | Hora de parede (hora local) | `local_starts_at`, `'HH:MM'` (`parseWallTime`, `formatWallTime`) | db, core | o que o relógio da unidade mostra |
-| Fuso | `timezone` (IANA, ex.: `America/Manaus`) | db, core | sempre o da **unidade**. Nunca offset fixo |
+| Offset UTC | `local_utc_offset_seconds` / `utcOffset` | db, core | diferença entre a hora de parede e o UTC naquela ocorrência. Distingue a hora repetida do fim do horário de verão |
+| Fuso | `timezone` (IANA, ex.: `America/Manaus`) | db, core | sempre o da **unidade**. Nunca offset fixo. No banco e no core, nome `Area/Local` sem dígito: `Etc/UTC`, não `UTC`; `Etc/GMT+3` é recusado |
 | Intervalo semiaberto | `[início, fim)`, `tstzrange(..., '[)')`, `Interval` | core, db | atendimentos encostados não colidem |
 | Relógio | `Clock` (`systemClock`, `fixedClock`) | core | única fonte de "agora" no domínio |
 | Dia local | — | core | pode ter 23 h, 25 h ou outra duração em fusos com horário de verão |
@@ -106,10 +107,11 @@ exaustivos em relação ao core. As transições estão em [modelo.md](modelo.md
 | Termo (pt-BR) | Identificador | Onde | Definição |
 |---|---|---|---|
 | Contexto de tenant | GUC `app.tenant_id` | db | definido por transação via `withTenant` |
-| Porta de acesso | `withTenant(db, tenantId, fn, { actor, readOnly })` | db | única forma de ler ou gravar dado de tenant |
+| Porta de acesso | `withTenant(db, tenantId, fn, { actor, readOnly })` | db | única forma de ler ou gravar dado de tenant, em transação READ COMMITTED; o `tx` só vale durante `fn` |
 | Papéis do banco | `app_migrator`, `app_user`, `app_worker` (planejado: `app_auth`) | db | dono das tabelas; app web; jobs; autenticação |
 | Isolamento | RLS `ENABLE` + `FORCE`, políticas `tenant_isolation` e `app_access` | db | ver [ADR-0002](../adr/0002-isolamento-multi-tenant-rls.md) |
-| Erros traduzidos | `SlotUnavailableError` (23P01), `TenantIsolationError` (42501), `InvalidStatusTransitionError`, `IdempotencyKeyConflictError` | db | erros do banco sem `DETAIL` |
+| Erros traduzidos | `SlotUnavailableError` (23P01), `TenantIsolationError` (42501), `InvalidStatusTransitionError`, `IdempotencyKeyConflictError`, `IdentifierConflictError` (23505 na PK: id já usado, possivelmente por outro tenant) | db | erros do banco sem `DETAIL` |
+| Transação encerrada | `TransactionClosedError` | db | `tx` usado depois do fim do callback de `withTenant` (bug do chamador) |
 | Erro de entrada do domínio | `SchedulingInputError` (com `field`) | core | entrada inválida no motor |
 | Erro de transição | `AppointmentTransitionError` (`code`: `transition_not_allowed`, `terminal_status`, `unchanged`, `unknown_status`) | core | transição recusada |
 | DAL | camada de acesso a dados do app | planejado | resolve sessão → membership → tenant antes de `withTenant` |

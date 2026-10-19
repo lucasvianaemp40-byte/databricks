@@ -6,7 +6,10 @@ import {
   extraBusyArb,
   serviceWithPauseArb,
 } from '../../test/arbitraries/availability';
-import { fixedOffsetZoneAndDateArb } from '../../test/arbitraries/time';
+import {
+  backwardPastMidnightZoneAndDateArb,
+  fixedOffsetZoneAndDateArb,
+} from '../../test/arbitraries/time';
 import {
   type NsRange,
   oracleDurationMinutes,
@@ -240,7 +243,7 @@ describe('computeAvailableSlots (propriedades)', { tags: ['property'] }, () => {
         xs.map((x) => ({ start: shift(x.start), end: shift(x.end) }));
       const inUtc = computeAvailableSlots({
         ...input,
-        timeZone: 'UTC',
+        timeZone: 'Etc/UTC',
         busy: shiftAll(input.busy),
         timeOff: shiftAll(input.timeOff),
         clock: fixedClock(shift(input.clock.now())),
@@ -285,6 +288,33 @@ describe('computeAvailableSlots (propriedades)', { tags: ['property'] }, () => {
         weeklySchedule: [...input.weeklySchedule].reverse(),
       });
       expect(reshuffled.map(key)).toEqual(expected);
+    },
+  );
+});
+
+// Dias históricos em que o relógio voltou para a véspera depois da meia-noite (fora do ZONES
+// global; ver test/arbitraries/time.ts). O motor não pode lançar erro nem rotular errado.
+describe('computeAvailableSlots: relógio que volta para a véspera (propriedades)', {
+  tags: ['property'],
+}, () => {
+  const backwardArb = availabilityInputArb({ zoneAndDate: backwardPastMidnightZoneAndDateArb() });
+
+  it.prop([backwardArb])('P9 (véspera): deve coincidir com o oráculo de força bruta', (input) => {
+    expect(plain(computeAvailableSlots(input))).toEqual(oracleSlots(input));
+  });
+
+  it.prop([backwardArb])(
+    'P1/P8 (véspera): todo horário cabe na jornada do seu dia e o relógio marca essa data',
+    (input) => {
+      for (const slot of computeAvailableSlots(input)) {
+        const zoned = slot.start.toZonedDateTimeISO(input.timeZone);
+        expect(zoned.toPlainDate().toString()).toBe(slot.localDate);
+        expect(slot.localTime).toBe(zoned.toPlainTime().toString({ smallestUnit: 'minute' }));
+        expect(slot.utcOffset).toBe(zoned.offset);
+        const windows = oracleWindows(input, Temporal.PlainDate.from(slot.localDate));
+        const { start, end } = asRange(slot);
+        expect(windows.some((w) => w.start <= start && end <= w.end)).toBe(true);
+      }
     },
   );
 });
