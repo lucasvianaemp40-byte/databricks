@@ -1,0 +1,60 @@
+# PostgreSQL de TESTE para o `pnpm test:db` sem instalar o PostgreSQL na máquina (macOS,
+# Windows com WSL 2 ou Linux com Docker ou Podman). Mesma imagem e digest do job de integração
+# do CI (.github/workflows/ci.yml); o Renovate atualiza os dois.
+#
+#   docker compose up -d --wait postgres-test
+#   export TEST_DATABASE_URL=postgresql://postgres:local_only_not_a_secret@127.0.0.1:55432/app_test
+#   pnpm test:db
+#   docker compose down          # descarta tudo: os dados ficam em memória (tmpfs)
+#
+# Só para teste: senha falsa e fixa (não é segredo), porta publicada apenas em loopback e
+# dados descartáveis. Nunca aponte o app nem dados reais para este cluster. Quem tem os
+# binários do PostgreSQL 16+ não precisa disto: o `pnpm test:db` sobe um cluster efêmero
+# sozinho (scripts/with-local-postgres.sh).
+name: agenda-salao
+
+services:
+  postgres-test:
+    image: postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+    environment:
+      # Superusuário do cluster descartável: o @salon/db migra e cria os papéis app_* com ele.
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local_only_not_a_secret
+      POSTGRES_DB: app_test
+      TZ: UTC
+    # Mesmos ajustes do cluster efêmero do script: rápido, sem durabilidade, em UTC.
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+      - -c
+      - timezone=UTC
+      - -c
+      - log_timezone=UTC
+      - -c
+      - max_connections=200
+    ports:
+      # Só loopback; 55432 para não colidir com um PostgreSQL local na 5432.
+      - 127.0.0.1:55432:5432
+    # No PostgreSQL 18 a imagem guarda os dados em /var/lib/postgresql/18/docker.
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      # Por TCP: durante a inicialização a imagem só escuta no socket Unix, então o "pronto"
+      # chega quando o banco app_test já existe.
+      test:
+        - CMD
+        - pg_isready
+        - -h
+        - 127.0.0.1
+        - -U
+        - postgres
+        - -d
+        - app_test
+      interval: 2s
+      timeout: 5s
+      retries: 30

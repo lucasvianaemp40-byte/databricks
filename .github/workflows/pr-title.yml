@@ -1,0 +1,81 @@
+# Conventional Commits no que chega à branch padrão. O merge é squash e a mensagem padrão é o
+# título do PR (.github/rulesets/README.md), então é o título que se valida. O commitlint local
+# (lefthook) é opcional e não cobre quem não instalou os hooks.
+#
+# Workflow próprio, e não um job do ci.yml, porque o título muda sem push: só `edited` dispara
+# de novo, e pôr `edited` no ci.yml refaria o CI inteiro a cada edição da descrição. O check
+# `pr-title` é obrigatório no ruleset (main.json), ao lado de `ci-ok` e `security-ok`.
+#
+# Limite: o diálogo de squash ainda deixa quem faz o merge editar a mensagem. O check garante o
+# título (a mensagem padrão), não a mensagem final.
+name: PR title
+
+on:
+  pull_request:
+    # O padrão (sem `types`) é opened, synchronize e reopened: editar o título não geraria run
+    # e o check ficaria verde com o título antigo.
+    types: [opened, edited, synchronize, reopened]
+  merge_group:
+
+# Nada por padrão; o job declara o mínimo de que precisa.
+permissions: {}
+
+# Edições seguidas: só a última conta.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DO_NOT_TRACK: "1"
+  FORCE_COLOR: "1"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Sem `if:` no job de propósito, nem para pular edição só da descrição: job pulado conta como
+  # sucesso num check obrigatório, e um run pulado depois de um título reprovado deixaria o
+  # check verde. Validar de novo custa pouco.
+  pr-title:
+    name: pr-title
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read # título ATUAL pela API REST (GET /repos/{repo}/pulls/{n})
+    steps:
+      # Pela API, e não pelo payload do evento: "Re-run" repete o payload antigo e validaria um
+      # título que talvez já tenha mudado. O token fica só neste passo, antes de qualquer código
+      # do PR (config do commitlint, dependências) entrar no job.
+      - name: Título atual do PR
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .title \
+            > "${RUNNER_TEMP}/pr-title.txt"
+          if [[ ! -s "${RUNNER_TEMP}/pr-title.txt" ]]; then
+            echo "::error::Não foi possível ler o título do PR #${PR_NUMBER}."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        if: ${{ github.event_name == 'pull_request' }}
+      # O título é texto de quem abre o PR: entra pelo arquivo (stdin), nunca interpolado no
+      # script. Fora de pull_request (merge queue) não há título novo: ele já passou por este
+      # check para o PR entrar na fila, e o passo só registra isso, para o check não ficar
+      # "skipped".
+      - name: commitlint no título do PR
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ "${EVENT_NAME}" != "pull_request" ]]; then
+            echo "Evento ${EVENT_NAME}: sem título de PR para validar (validado no PR)."
+            exit 0
+          fi
+          pnpm exec commitlint --verbose < "${RUNNER_TEMP}/pr-title.txt"

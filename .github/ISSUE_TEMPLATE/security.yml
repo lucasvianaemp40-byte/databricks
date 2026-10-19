@@ -1,0 +1,30 @@
+name: Segurança (sem detalhes da falha)
+description: Para vulnerabilidades, use o relato privado. Este formulário é só um aviso.
+title: "security: "
+labels: [security]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Pare: não descreva a vulnerabilidade aqui
+
+        Issues são públicas. Para relatar falha de segurança ou exposição de dados pessoais,
+        use o **relato privado de vulnerabilidade** do GitHub (aba Security > "Report a
+        vulnerability", ou [este link](../security/advisories/new)), o único canal oficial
+        segundo a [política de segurança](../security/policy).
+
+        Use este formulário apenas para pedir um canal de contato ou para sugestões de
+        endurecimento que não exponham uma falha explorável.
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmação
+      options:
+        - label: Li o SECURITY.md e esta issue não contém detalhes de uma falha explorável nem dados pessoais.
+          required: true
+  - type: textarea
+    id: request
+    attributes:
+      label: Pedido ou sugestão de endurecimento
+    validations:
+      required: true

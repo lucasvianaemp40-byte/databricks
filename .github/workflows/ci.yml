@@ -1,0 +1,206 @@
+# CI do monorepo: os mesmos comandos do contrato local (package.json da raiz).
+# Checks obrigatórios do ruleset: `ci-ok` (este arquivo, agrega os demais jobs daqui),
+# `security-ok` (security.yml) e `pr-title` (pr-title.yml, que roda também quando o título do
+# PR é editado).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+# Nada por padrão; cada job declara o mínimo de que precisa.
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+  TURBO_TELEMETRY_DISABLED: "1"
+  DO_NOT_TRACK: "1"
+  FORCE_COLOR: "1"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  static:
+    name: Formatação, lint e tipos
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: setup
+        uses: ./.github/actions/setup
+      - name: pnpm format:check
+        run: pnpm format:check
+      # Os passos seguintes rodam mesmo se o anterior falhar: um PR recebe todos os erros de uma vez.
+      - name: pnpm lint
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: pnpm lint
+      # Arquivos, exports e dependências sem uso (knip.json). Dependência morta no manifesto é
+      # superfície de supply chain sem benefício.
+      - name: pnpm knip
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: pnpm knip
+      - name: pnpm typecheck
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: pnpm typecheck
+
+  test:
+    name: Testes unitários e de propriedade (TZ=${{ matrix.tz }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # O resultado não pode depender do fuso do processo: UTC (servidor) e São Paulo
+        # (máquina do dev, com histórico de horário de verão até 2019).
+        tz: [UTC, America/Sao_Paulo]
+    env:
+      TZ: ${{ matrix.tz }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: pnpm test
+
+  test-db:
+    name: Integração e RLS (PostgreSQL 18)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+        env:
+          # Superusuário do cluster EFÊMERO do job: o global setup do @salon/db cria um banco
+          # descartável, roda as migrações (que criam app_migrator/app_user/app_worker) e os
+          # testes de RLS conectam como app_user/app_worker (NOSUPERUSER, NOBYPASSRLS).
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_only_not_a_secret
+          POSTGRES_DB: app_test
+          TZ: UTC
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d app_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TZ: UTC
+      TEST_DATABASE_URL: postgresql://postgres:ci_only_not_a_secret@localhost:5432/app_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # O compose.yaml (pnpm test:db local com Docker) promete a mesma imagem e o mesmo digest
+      # deste serviço; o Renovate atualiza os dois num PR só (grupo postgres-test-image).
+      - name: Imagem do PostgreSQL igual à do compose.yaml
+        run: |
+          ci_image="$(sed -nE 's/^ +image: (postgres:[^ ]+)$/\1/p' .github/workflows/ci.yml)"
+          compose_image="$(sed -nE 's/^ +image: (postgres:[^ ]+)$/\1/p' compose.yaml)"
+          echo "ci.yml: ${ci_image:-ausente}"
+          echo "compose.yaml: ${compose_image:-ausente}"
+          if [[ -z "${ci_image}" || "${ci_image}" != "${compose_image}" ]]; then
+            echo "::error file=compose.yaml::A imagem do PostgreSQL difere da do serviço do ci.yml (tag e digest têm de ser iguais)."
+            exit 1
+          fi
+      - uses: ./.github/actions/setup
+      - run: pnpm test:db
+
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: pnpm build
+
+  e2e:
+    name: E2E (Playwright, WCAG 2.2 AA)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      # Sem cache dos navegadores: a doc do Playwright desaconselha (restaurar leva o mesmo
+      # tempo que baixar) e um binário de navegador vindo de cache é mais uma superfície.
+      - name: Navegador do Playwright (versão do lockfile)
+        run: pnpm --filter @salon/web exec playwright install --with-deps chromium
+      # O webServer do playwright.config.ts faz `next build` + `next start` com APP_ENV=e2e
+      # (o mesmo build de produção que vai ao ar, com a CSP real).
+      - run: pnpm e2e
+      - name: Relatório do Playwright (só em falha)
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report
+          path: |
+            apps/web/playwright-report/
+            apps/web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  hooks:
+    name: Hooks do Claude Code
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: pnpm test:hooks
+      # Os hooks são .mjs com tipos em JSDoc (checkJs): `node --test` não confere tipos, e o
+      # `pnpm typecheck` (turbo) só cobre os pacotes do workspace.
+      - name: Typecheck dos hooks
+        run: pnpm exec tsc -p .claude/hooks
+
+  # Check obrigatório do ruleset (junto com security-ok, do security.yml, e pr-title, do
+  # pr-title.yml). Falha se qualquer job acima falhar, for cancelado ou pulado; assim nenhum
+  # check fica "pendente para sempre" quando um job nem chega a rodar.
+  ci-ok:
+    name: ci-ok
+    if: ${{ always() }}
+    needs: [static, test, test-db, build, e2e, hooks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Conferir o resultado dos jobs
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Resultados: ${RESULTS}"
+          for result in ${RESULTS}; do
+            if [[ "${result}" != "success" ]]; then
+              echo "::error::Pelo menos um job obrigatório terminou como '${result}'."
+              exit 1
+            fi
+          done

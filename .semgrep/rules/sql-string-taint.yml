@@ -1,0 +1,75 @@
+# SQL montado numa VARIÁVEL por interpolação ou concatenação e depois passado ao driver
+# (injeção de SQL, ASVS 1.2.4 / OWASP A05:2025). Regra irmã de sql-raw-interpolation, que pega
+# o template ou a concatenação escritos direto na chamada; esta segue o valor pelo fluxo
+# (const q = `...${x}...`; client.query(q)), inclusive `+=` e a forma { text } do node-postgres.
+#
+# Seguro (mesmas convenções de sql-raw-interpolation):
+#   - sql`... ${valor} ...` do Drizzle (tagged template): cada ${} vira parâmetro;
+#   - texto fixo com $1, $2... e os valores no array de parâmetros;
+#   - identificador dinâmico só com client.escapeIdentifier(nome) / escapeLiteral(valor);
+#   - constante de módulo em CAIXA_ALTA (valor fixo do código, nunca derivado de entrada).
+#
+# Fora do escopo: packages/db/src/schema/ (DDL a partir de constantes, ver sql-raw-interpolation).
+rules:
+  - id: sql-string-taint
+    languages: [typescript, javascript]
+    severity: ERROR
+    mode: taint
+    paths:
+      exclude:
+        - /packages/db/src/schema/
+    message: >-
+      Texto SQL montado por interpolação/concatenação de string chega ao driver por uma variável.
+      Use o tagged template sql`...${valor}...` do Drizzle ou consulta parametrizada
+      (client.query('... $1', [valor])). Para identificador dinâmico, use
+      client.escapeIdentifier().
+    pattern-sources:
+      - by-side-effect: false
+        patterns:
+          - pattern-either:
+              - pattern: "`...${$EXPR}...`"
+              - pattern: '"..." + $EXPR'
+              - pattern: '$EXPR + "..."'
+          # Valores escapados pelo próprio driver e constantes em CAIXA_ALTA não contaminam.
+          - metavariable-pattern:
+              metavariable: $EXPR
+              patterns:
+                - pattern-not: $C.escapeIdentifier(...)
+                - pattern-not: $C.escapeLiteral(...)
+                - pattern-not-regex: ^[A-Z][A-Z0-9_]*$
+    pattern-sanitizers:
+      - pattern: $C.escapeIdentifier(...)
+      - pattern: $C.escapeLiteral(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.$METHOD($SINK, ...)
+              - pattern: '$DB.$METHOD({..., text: $SINK, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(query|execute|unsafe|\$executeRawUnsafe|\$queryRawUnsafe)$
+          # Template/concatenação escritos direto na chamada já são acusados por
+          # sql-raw-interpolation; aqui só o que chega por variável (sem achado duplicado). O
+          # objeto { text } inteiro também sai: o campo `text` é o sink do segundo padrão.
+          - metavariable-pattern:
+              metavariable: $SINK
+              patterns:
+                - pattern-not: "`...${$X}...`"
+                - pattern-not: $A + $B
+                - pattern-not: "{..., text: $T, ...}"
+                # sql.raw(variável) já é acusado por sql-raw-interpolation.
+                - pattern-not: $S.raw(...)
+          - focus-metavariable: $SINK
+    metadata:
+      category: security
+      subcategory: [vuln]
+      cwe:
+        - "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      owasp:
+        - "A05:2025 - Injection"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://orm.drizzle.team/docs/sql
+        - https://node-postgres.com/features/queries#parameterized-query

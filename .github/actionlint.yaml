@@ -1,0 +1,19 @@
+# actionlint (rodado no security.yml com a imagem rhysd/actionlint:1.7.12 pinada por digest).
+#
+# Variáveis de repositório usadas pelos workflows (vars.*): sem esta lista o actionlint acusa
+# variável desconhecida.
+config-variables:
+  - GHAS_ENABLED
+  - SCORECARD_PUBLISH
+  - CLAUDE_MODEL
+  - CLAUDE_REVIEW_MODEL
+
+paths:
+  .github/workflows/**/*.{yml,yaml}:
+    ignore:
+      # A chave de job `cache-mode` (GA no github.com em 2026-09-10) é mais nova que o
+      # actionlint 1.7.12 (mar/2026). Remover quando o actionlint passar a conhecê-la.
+      - 'unexpected key "cache-mode" for "job" section'
+      # Idem para `concurrency.queue` (`single`/`max`, documentada para o github.com em
+      # data/reusables/actions/actions-group-concurrency.md do github/docs), usada no claude.yml.
+      - 'unexpected key "queue" for "concurrency" section'

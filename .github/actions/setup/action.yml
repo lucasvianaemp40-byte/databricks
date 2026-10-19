@@ -1,0 +1,98 @@
+# Ação composta local (`uses: ./.github/actions/setup`). Ações locais são resolvidas no commit
+# em execução, portanto já estão "pinadas"; as externas abaixo usam SHA completo.
+name: Setup do monorepo
+description: >-
+  Node da versão do .nvmrc, pnpm na versão EXATA do campo packageManager do package.json (via
+  Corepack, que confere o hash sha512 fixado ali) e `pnpm install --frozen-lockfile`. O pnpm 11
+  reaplica ao lockfile as políticas de supply chain do pnpm-workspace.yaml (minimumReleaseAge,
+  trustPolicy, blockExoticSubdeps, allowBuilds) em todo install.
+
+inputs:
+  cache:
+    description: >-
+      "true" restaura (e, no fim do job, salva) o store do pnpm. Use "false" em todo job com
+      segredo, id-token ou deploy, e defina `cache-mode: none` no job: o incidente TanStack
+      (mai/2026) começou com um cache de store envenenado restaurado num job de release.
+    required: false
+    default: "true"
+  install:
+    description: '"false" para só preparar Node e pnpm, sem instalar dependências.'
+    required: false
+    default: "true"
+  install-args:
+    description: 'Argumentos extras para `pnpm install`, por exemplo --ignore-scripts.'
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Node (.nvmrc)
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version-file: .nvmrc
+        # O cache fica a cargo do passo explícito abaixo (controlado pela entrada `cache`).
+        package-manager-cache: false
+
+    # Corepack (vem com o Node 24) baixa o tarball do pnpm da versão do packageManager
+    # (pnpm@11.28.5+sha512...) e confere o sha512 fixado ali antes de executar: hash diferente
+    # para tudo ("Mismatch hashes"). É o mesmo controle da máquina de dev. O pnpm/action-setup
+    # descartava o hash ("Strip the integrity hash for self-update") e rodava `pnpm self-update`.
+    # O Node 25+ não traz mais o Corepack: ao subir o .nvmrc para 26, troque este passo por
+    # download do tarball + `sha512sum -c` + `npm install -g --ignore-scripts` do MESMO arquivo.
+    - name: pnpm via Corepack (confere o sha512 do packageManager)
+      shell: bash
+      env:
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      run: |
+        if ! command -v corepack >/dev/null 2>&1; then
+          echo "::error::Corepack ausente neste Node ($(node --version)): o hash do packageManager não seria conferido."
+          exit 1
+        fi
+        corepack enable pnpm
+        # O pnpm do PATH tem de ser o shim do Corepack, não um pnpm preinstalado no runner.
+        pnpm_path="$(command -v pnpm)"
+        if [[ "$(readlink -f "${pnpm_path}")" != */corepack/* ]]; then
+          echo "::error::o pnpm do PATH (${pnpm_path}) não é o shim do Corepack."
+          exit 1
+        fi
+        pnpm --version
+
+    - name: Conferir versões de Node e pnpm
+      shell: bash
+      run: |
+        expected="$(node -p "require('./package.json').packageManager.split('@')[1].split('+')[0]")"
+        actual="$(pnpm --version)"
+        echo "Node $(node --version), pnpm ${actual}"
+        if [[ "${actual}" != "${expected}" ]]; then
+          echo "::error::pnpm ${actual} instalado, mas o package.json pede ${expected}"
+          exit 1
+        fi
+
+    - name: Caminho do store do pnpm
+      id: store
+      if: ${{ inputs.cache == 'true' }}
+      shell: bash
+      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+    # Escopo do cache: em pull_request o save vai para refs/pull/N/merge e não alcança a branch
+    # padrão; o escopo dela só é escrito por runs NELA (push e os agendados, como o DAST de
+    # terça e sexta), sempre com código já mergeado. Mesmo restaurado, o store tem a integridade
+    # de cada arquivo conferida pelo pnpm antes do link (verifyStoreIntegrity, padrão true).
+    - name: Cache do store do pnpm
+      if: ${{ inputs.cache == 'true' }}
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.store.outputs.path }}
+        key: pnpm-store-v1-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+        restore-keys: |
+          pnpm-store-v1-${{ runner.os }}-
+
+    - name: pnpm install (lockfile congelado)
+      if: ${{ inputs.install == 'true' }}
+      shell: bash
+      env:
+        INSTALL_ARGS: ${{ inputs.install-args }}
+      run: |
+        # shellcheck disable=SC2086 # INSTALL_ARGS é expandido em palavras de propósito.
+        pnpm install --frozen-lockfile ${INSTALL_ARGS}

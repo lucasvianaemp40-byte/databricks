@@ -1,0 +1,45 @@
+# Domínio puro (@salon/scheduling-core) não lê relógio nem aleatoriedade do ambiente.
+#
+# O tempo entra por um Clock injetado (systemClock em produção, fixedClock em testes) e a
+# aleatoriedade por parâmetro. Assim as regras de agenda são determinísticas, testáveis por
+# propriedade e independentes do fuso do servidor. Defesa em profundidade da regra de ESLint
+# createPureDomainConfig (eslint.base.mjs): esta pega também código fora do alcance do lint.
+#
+# Única exceção: src/time/clock.ts, onde vive o systemClock (excluído abaixo).
+rules:
+  - id: domain-clock
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      O domínio não pode ler o relógio nem a aleatoriedade do ambiente. Receba um Clock por
+      injeção (clock.now()) ou o valor como parâmetro; o único ponto autorizado é o systemClock
+      em packages/scheduling-core/src/time/clock.ts.
+    # `semgrep --test` ignora `paths` (verificado na 1.180.0): a fixture ao lado é testada mesmo
+    # fora destes diretórios.
+    paths:
+      include:
+        - /packages/scheduling-core/src/
+      exclude:
+        - /packages/scheduling-core/src/time/clock.ts
+        - "*.test.ts"
+    pattern-either:
+      - pattern: Date.now()
+      - pattern: new Date()
+      - pattern: Date()
+      - pattern: Temporal.Now.$METHOD(...)
+      - pattern: Math.random()
+      - pattern: performance.now()
+      - pattern: crypto.randomUUID()
+      - pattern: crypto.getRandomValues(...)
+      - pattern: process.hrtime(...)
+      - pattern: process.hrtime.bigint()
+    metadata:
+      category: correctness
+      subcategory: [audit]
+      cwe:
+        - "CWE-1188: Initialization of a Resource with an Insecure Default"
+      confidence: HIGH
+      likelihood: HIGH
+      impact: MEDIUM
+      references:
+        - https://tc39.es/proposal-temporal/docs/now.html

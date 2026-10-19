@@ -1,0 +1,43 @@
+# Donos de código. A última regra que casa com o arquivo vence.
+# Com o ruleset em .github/rulesets/main.json, "require_code_owner_review" fica desligado
+# enquanto houver uma só pessoa no projeto (ninguém aprova o próprio PR); ao entrar a segunda
+# pessoa, ligue-o e troque os donos das áreas abaixo.
+
+*                           @lucasvianaemp40-byte
+
+# Automação, CI e agentes: superfície de supply chain (workflows, hooks e instruções de IA são
+# alvo de worms como Shai-Hulud). Revisão humana obrigatória assim que o ruleset ligar
+# require_code_owner_review; até lá, só identifica o dono.
+/.github/                   @lucasvianaemp40-byte
+/.claude/                   @lucasvianaemp40-byte
+/.mcp.json                  @lucasvianaemp40-byte
+/CLAUDE.md                  @lucasvianaemp40-byte
+/AGENTS.md                  @lucasvianaemp40-byte
+/.vscode/                   @lucasvianaemp40-byte
+/scripts/                   @lucasvianaemp40-byte
+/lefthook.yml               @lucasvianaemp40-byte
+
+# Dependências e toolchain.
+/package.json               @lucasvianaemp40-byte
+/pnpm-workspace.yaml        @lucasvianaemp40-byte
+/pnpm-lock.yaml             @lucasvianaemp40-byte
+/.npmrc                     @lucasvianaemp40-byte
+/.nvmrc                     @lucasvianaemp40-byte
+/renovate.json5             @lucasvianaemp40-byte
+
+# Configuração dos scanners: afrouxar uma regra é decisão de segurança.
+/.gitleaks.toml             @lucasvianaemp40-byte
+/.semgrep/                  @lucasvianaemp40-byte
+/.semgrepignore             @lucasvianaemp40-byte
+/.zap/                      @lucasvianaemp40-byte
+/eslint.base.mjs            @lucasvianaemp40-byte
+/biome.json                 @lucasvianaemp40-byte
+
+# Banco: migrações, papéis e políticas RLS (isolamento entre salões).
+/packages/db/               @lucasvianaemp40-byte
+
+# Autorização e cabeçalhos de segurança do app.
+/apps/web/src/proxy.ts      @lucasvianaemp40-byte
+/apps/web/src/lib/security/ @lucasvianaemp40-byte
+
+/SECURITY.md                @lucasvianaemp40-byte

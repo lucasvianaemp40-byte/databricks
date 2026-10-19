@@ -1,0 +1,58 @@
+# OpenSSF Scorecard: nota de práticas de segurança do repositório (pins, permissões, revisão,
+# branch protection...). Ligado por padrão; repositório privado SEM GitHub Code Security define
+# GHAS_ENABLED = 'false' (o upload do SARIF exige code scanning).
+#
+# Com publish_results (só repo público), a API do Scorecard rejeita o run se o workflow tiver
+# env/defaults no topo, permissão de escrita no topo, ou se o job tiver env, defaults,
+# container, services ou passos fora de: actions/checkout, actions/upload-artifact,
+# github/codeql-action/upload-sarif, ossf/scorecard-action, step-security/harden-runner.
+name: Scorecard
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: "23 10 * * 1" # segunda 10:23 UTC
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  analysis:
+    name: Scorecard
+    if: ${{ vars.GHAS_ENABLED != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read # check Dangerous-Workflow/Token-Permissions lê os workflows
+      security-events: write # upload do SARIF
+      id-token: write # publicar o resultado (badge/API), só com SCORECARD_PUBLISH
+      # Leituras recomendadas pelo README da action para repositório privado.
+      issues: read # check Maintained
+      pull-requests: read # checks Code-Review e Contributors
+      checks: read # check CI-Tests
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: scorecard.sarif
+          results_format: sarif
+          # Só repositório público publica (badge e API do OpenSSF): variável SCORECARD_PUBLISH.
+          publish_results: ${{ vars.SCORECARD_PUBLISH == 'true' }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scorecard-sarif
+          path: scorecard.sarif
+          retention-days: 5
+      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: scorecard.sarif
+          category: scorecard

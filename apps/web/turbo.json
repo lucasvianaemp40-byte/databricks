@@ -1,0 +1,40 @@
+{
+  "$schema": "../../node_modules/turbo/schema.json",
+  "extends": [
+    "//"
+  ],
+  "tasks": {
+    "build": {
+      "env": [
+        "APP_ENV"
+      ],
+      "passThroughEnv": [
+        "APP_URL",
+        "NEXT_TELEMETRY_DISABLED"
+      ]
+    },
+    "dev": {
+      "passThroughEnv": [
+        "APP_ENV",
+        "APP_URL",
+        "NEXT_TELEMETRY_DISABLED"
+      ]
+    },
+    "typecheck": {
+      "env": [
+        "APP_ENV"
+      ],
+      "passThroughEnv": [
+        "APP_URL",
+        "NEXT_TELEMETRY_DISABLED"
+      ]
+    },
+    "e2e": {
+      "passThroughEnv": [
+        "E2E_*",
+        "PLAYWRIGHT_*",
+        "NEXT_TELEMETRY_DISABLED"
+      ]
+    }
+  }
+}

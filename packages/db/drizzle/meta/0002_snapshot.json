@@ -1,0 +1,2125 @@
+{
+  "id": "14d3e191-b384-44e8-95ab-7584aaee9603",
+  "prevId": "60437446-97f7-41d9-9d97-c517857fd5b3",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "app.appointment_events": {
+      "name": "appointment_events",
+      "schema": "app",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "NULLIF(current_setting('app.tenant_id', true), '')::uuid"
+        },
+        "appointment_id": {
+          "name": "appointment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "event_type": {
+          "name": "event_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "from_status": {
+          "name": "from_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "to_status": {
+          "name": "to_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_type": {
+          "name": "actor_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "clock_timestamp()"
+        }
+      },
+      "indexes": {
+        "appointment_events_tenant_appointment_idx": {
+          "name": "appointment_events_tenant_appointment_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "appointment_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "appointment_events_appointment_fk": {
+          "name": "appointment_events_appointment_fk",
+          "tableFrom": "appointment_events",
+          "tableTo": "appointments",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id",
+            "appointment_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "appointment_events_type_valid": {
+          "name": "appointment_events_type_valid",
+          "value": "\"app\".\"appointment_events\".\"event_type\" IN ('created', 'status_changed')"
+        },
+        "appointment_events_from_status_valid": {
+          "name": "appointment_events_from_status_valid",
+          "value": "\"app\".\"appointment_events\".\"from_status\" IN ('pending', 'confirmed', 'checked_in', 'in_service', 'completed', 'cancelled_by_customer', 'cancelled_by_salon', 'no_show', 'expired')"
+        },
+        "appointment_events_to_status_valid": {
+          "name": "appointment_events_to_status_valid",
+          "value": "\"app\".\"appointment_events\".\"to_status\" IN ('pending', 'confirmed', 'checked_in', 'in_service', 'completed', 'cancelled_by_customer', 'cancelled_by_salon', 'no_show', 'expired')"
+        },
+        "appointment_events_from_status_shape": {
+          "name": "appointment_events_from_status_shape",
+          "value": "(\"app\".\"appointment_events\".\"event_type\" = 'created') = (\"app\".\"appointment_events\".\"from_status\" IS NULL)"
+        },
+        "appointment_events_actor_type_valid": {
+          "name": "appointment_events_actor_type_valid",
+          "value": "\"app\".\"appointment_events\".\"actor_type\" IN ('customer', 'staff', 'system', 'unknown')"
+        },
+        "appointment_events_actor_id_length": {
+          "name": "appointment_events_actor_id_length",
+          "value": "char_length(\"app\".\"appointment_events\".\"actor_id\") BETWEEN 1 AND 128"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "app.appointment_items": {
+      "name": "appointment_items",
+      "schema": "app",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "NULLIF(current_setting('app.tenant_id', true), '')::uuid"
+        },
+        "appointment_id": {
+          "name": "appointment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "position": {
+          "name": "position",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "staff_id": {
+          "name": "staff_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service_name": {
+          "name": "service_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "duration_min": {
+          "name": "duration_min",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "phases": {
+          "name": "phases",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "price_cents": {
+          "name": "price_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "commission_bps": {
+          "name": "commission_bps",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "buffer_before_min": {
+          "name": "buffer_before_min",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "buffer_after_min": {
+          "name": "buffer_after_min",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "starts_at": {
+          "name": "starts_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ends_at": {
+          "name": "ends_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "appointment_items_tenant_staff_starts_idx": {
+          "name": "appointment_items_tenant_staff_starts_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "staff_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "starts_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "appointment_items_tenant_service_idx": {
+          "name": "appointment_items_tenant_service_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "service_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "appointment_items_appointment_fk": {
+          "name": "appointment_items_appointment_fk",
+          "tableFrom": "appointment_items",
+          "tableTo": "appointments",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id",
+            "appointment_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "appointment_items_service_fk": {
+          "name": "appointment_items_service_fk",
+          "tableFrom": "appointment_items",
+          "tableTo": "services",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id",
+            "service_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "appointment_items_staff_fk": {
+          "name": "appointment_items_staff_fk",
+          "tableFrom": "appointment_items",
+          "tableTo": "staff",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id",
+            "staff_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "appointment_items_tenant_id_id_key": {
+          "name": "appointment_items_tenant_id_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        },
+        "appointment_items_tenant_appointment_id_staff_key": {
+          "name": "appointment_items_tenant_appointment_id_staff_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "appointment_id",
+            "id",
+            "staff_id"
+          ]
+        },
+        "appointment_items_tenant_appointment_position_key": {
+          "name": "appointment_items_tenant_appointment_position_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "appointment_id",
+            "position"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "appointment_items_position_range": {
+          "name": "appointment_items_position_range",
+          "value": "\"app\".\"appointment_items\".\"position\" BETWEEN 1 AND 50"
+        },
+        "appointment_items_service_name_length": {
+          "name": "appointment_items_service_name_length",
+          "value": "char_length(\"app\".\"appointment_items\".\"service_name\") BETWEEN 1 AND 120"
+        },
+        "appointment_items_duration_range": {
+          "name": "appointment_items_duration_range",
+          "value": "\"app\".\"appointment_items\".\"duration_min\" BETWEEN 5 AND 720"
+        },
+        "appointment_items_phases_valid": {
+          "name": "appointment_items_phases_valid",
+          "value": "app_private.service_phases_are_valid(\"app\".\"appointment_items\".\"phases\", \"app\".\"appointment_items\".\"duration_min\")"
+        },
+        "appointment_items_duration_coherent": {
+          "name": "appointment_items_duration_coherent",
+          "value": "\"app\".\"appointment_items\".\"ends_at\" - \"app\".\"appointment_items\".\"starts_at\" = make_interval(mins => \"app\".\"appointment_items\".\"duration_min\")"
+        },
+        "appointment_items_price_range": {
+          "name": "appointment_items_price_range",
+          "value": "\"app\".\"appointment_items\".\"price_cents\" BETWEEN 0 AND 100000000"
+        },
+        "appointment_items_commission_range": {
+          "name": "appointment_items_commission_range",
+          "value": "\"app\".\"appointment_items\".\"commission_bps\" BETWEEN 0 AND 10000"
+        },
+        "appointment_items_time_order": {
+          "name": "appointment_items_time_order",
+          "value": "\"app\".\"appointment_items\".\"ends_at\" > \"app\".\"appointment_items\".\"starts_at\""
+        },
+        "appointment_items_instant_precision": {
+          "name": "appointment_items_instant_precision",
+          "value": "date_trunc('milliseconds', \"app\".\"appointment_items\".\"starts_at\") = \"app\".\"appointment_items\".\"starts_at\" AND date_trunc('milliseconds', \"app\".\"appointment_items\".\"ends_at\") = \"app\".\"appointment_items\".\"ends_at\""
+        },
+        "appointment_items_buffer_before_range": {
+          "name": "appointment_items_buffer_before_range",
+          "value": "\"app\".\"appointment_items\".\"buffer_before_min\" BETWEEN 0 AND 240"
+        },
+        "appointment_items_buffer_after_range": {
+          "name": "appointment_items_buffer_after_range",
+          "value": "\"app\".\"appointment_items\".\"buffer_after_min\" BETWEEN 0 AND 240"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "app.appointments": {
+      "name": "appointments",
+      "schema": "app",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "NULLIF(current_setting('app.tenant_id', true), '')::uuid"
+        },
+        "location_id": {
+          "name": "location_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "starts_at": {
+          "name": "starts_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ends_at": {
+          "name": "ends_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "local_starts_at": {
+          "name": "local_starts_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "local_utc_offset_seconds": {
+          "name": "local_utc_offset_seconds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "timezone": {
+          "name": "timezone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "hold_expires_at": {
+          "name": "hold_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "confirmed_at": {
+          "name": "confirmed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "checked_in_at": {
+          "name": "checked_in_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cancelled_at": {
+          "name": "cancelled_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "no_show_at": {
+          "name": "no_show_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expired_at": {
+          "name": "expired_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cancellation_reason": {
+          "name": "cancellation_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rescheduled_from_id": {
+          "name": "rescheduled_from_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "appointments_tenant_location_starts_idx": {
+          "name": "appointments_tenant_location_starts_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "location_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "starts_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "appointments_tenant_customer_starts_idx": {
+          "name": "appointments_tenant_customer_starts_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "customer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "starts_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "appointments_tenant_pending_hold_idx": {
+          "name": "appointments_tenant_pending_hold_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "hold_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"app\".\"appointments\".\"status\" = 'pending'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "appointments_location_fk": {
+          "name": "appointments_location_fk",
+          "tableFrom": "appointments",
+          "tableTo": "locations",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id",
+            "location_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "appointments_customer_fk": {
+          "name": "appointments_customer_fk",
+          "tableFrom": "appointments",
+          "tableTo": "customers",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "appointments_rescheduled_from_fk": {
+          "name": "appointments_rescheduled_from_fk",
+          "tableFrom": "appointments",
+          "tableTo": "appointments",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id",
+            "rescheduled_from_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "appointments_tenant_id_id_key": {
+          "name": "appointments_tenant_id_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        },
+        "appointments_tenant_idempotency_key_key": {
+          "name": "appointments_tenant_idempotency_key_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "idempotency_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "appointments_status_valid": {
+          "name": "appointments_status_valid",
+          "value": "\"app\".\"appointments\".\"status\" IN ('pending', 'confirmed', 'checked_in', 'in_service', 'completed', 'cancelled_by_customer', 'cancelled_by_salon', 'no_show', 'expired')"
+        },
+        "appointments_source_valid": {
+          "name": "appointments_source_valid",
+          "value": "\"app\".\"appointments\".\"source\" IN ('online', 'staff', 'walk_in')"
+        },
+        "appointments_time_order": {
+          "name": "appointments_time_order",
+          "value": "\"app\".\"appointments\".\"ends_at\" > \"app\".\"appointments\".\"starts_at\""
+        },
+        "appointments_max_length": {
+          "name": "appointments_max_length",
+          "value": "\"app\".\"appointments\".\"ends_at\" - \"app\".\"appointments\".\"starts_at\" <= interval '24 hours'"
+        },
+        "appointments_instant_precision": {
+          "name": "appointments_instant_precision",
+          "value": "date_trunc('milliseconds', \"app\".\"appointments\".\"starts_at\") = \"app\".\"appointments\".\"starts_at\" AND date_trunc('milliseconds', \"app\".\"appointments\".\"ends_at\") = \"app\".\"appointments\".\"ends_at\""
+        },
+        "appointments_timezone_valid": {
+          "name": "appointments_timezone_valid",
+          "value": "app_private.is_valid_iana_timezone(\"app\".\"appointments\".\"timezone\")"
+        },
+        "appointments_utc_offset_range": {
+          "name": "appointments_utc_offset_range",
+          "value": "\"app\".\"appointments\".\"local_utc_offset_seconds\" BETWEEN -64800 AND 64800"
+        },
+        "appointments_local_time_coherent": {
+          "name": "appointments_local_time_coherent",
+          "value": "\"app\".\"appointments\".\"local_starts_at\" = date_trunc('second', (\"app\".\"appointments\".\"starts_at\" AT TIME ZONE 'UTC') + make_interval(secs => \"app\".\"appointments\".\"local_utc_offset_seconds\"))"
+        },
+        "appointments_pending_requires_hold": {
+          "name": "appointments_pending_requires_hold",
+          "value": "\"app\".\"appointments\".\"status\" <> 'pending' OR \"app\".\"appointments\".\"hold_expires_at\" IS NOT NULL"
+        },
+        "appointments_idempotency_key_format": {
+          "name": "appointments_idempotency_key_format",
+          "value": "\"app\".\"appointments\".\"idempotency_key\" ~ '^[A-Za-z0-9._:-]{8,128}$'"
+        },
+        "appointments_cancellation_reason_length": {
+          "name": "appointments_cancellation_reason_length",
+          "value": "char_length(\"app\".\"appointments\".\"cancellation_reason\") BETWEEN 1 AND 500"
+        },
+        "appointments_version_positive": {
+          "name": "appointments_version_positive",
+          "value": "\"app\".\"appointments\".\"version\" >= 1"
+        },
+        "appointments_not_rescheduled_from_self": {
+          "name": "appointments_not_rescheduled_from_self",
+          "value": "\"app\".\"appointments\".\"rescheduled_from_id\" <> \"app\".\"appointments\".\"id\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "app.occupancies": {
+      "name": "occupancies",
+      "schema": "app",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "NULLIF(current_setting('app.tenant_id', true), '')::uuid"
+        },
+        "appointment_id": {
+          "name": "appointment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "appointment_item_id": {
+          "name": "appointment_item_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "staff_id": {
+          "name": "staff_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'service'"
+        },
+        "starts_at": {
+          "name": "starts_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ends_at": {
+          "name": "ends_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "during": {
+          "name": "during",
+          "type": "tstzrange",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "tstzrange(\"starts_at\", \"ends_at\", '[)')",
+            "type": "stored"
+          }
+        },
+        "active": {
+          "name": "active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "occupancies_tenant_appointment_item_idx": {
+          "name": "occupancies_tenant_appointment_item_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "appointment_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "appointment_item_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "occupancies_appointment_item_fk": {
+          "name": "occupancies_appointment_item_fk",
+          "tableFrom": "occupancies",
+          "tableTo": "appointment_items",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id",
+            "appointment_id",
+            "appointment_item_id",
+            "staff_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "appointment_id",
+            "id",
+            "staff_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "occupancies_staff_fk": {
+          "name": "occupancies_staff_fk",
+          "tableFrom": "occupancies",
+          "tableTo": "staff",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id",
+            "staff_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "occupancies_kind_valid": {
+          "name": "occupancies_kind_valid",
+          "value": "\"app\".\"occupancies\".\"kind\" IN ('service', 'buffer')"
+        },
+        "occupancies_time_order": {
+          "name": "occupancies_time_order",
+          "value": "\"app\".\"occupancies\".\"ends_at\" > \"app\".\"occupancies\".\"starts_at\""
+        },
+        "occupancies_max_length": {
+          "name": "occupancies_max_length",
+          "value": "\"app\".\"occupancies\".\"ends_at\" - \"app\".\"occupancies\".\"starts_at\" <= interval '24 hours'"
+        },
+        "occupancies_instant_precision": {
+          "name": "occupancies_instant_precision",
+          "value": "date_trunc('milliseconds', \"app\".\"occupancies\".\"starts_at\") = \"app\".\"occupancies\".\"starts_at\" AND date_trunc('milliseconds', \"app\".\"occupancies\".\"ends_at\") = \"app\".\"occupancies\".\"ends_at\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "app.time_off": {
+      "name": "time_off",
+      "schema": "app",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "NULLIF(current_setting('app.tenant_id', true), '')::uuid"
+        },
+        "staff_id": {
+          "name": "staff_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "starts_at": {
+          "name": "starts_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ends_at": {
+          "name": "ends_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "during": {
+          "name": "during",
+          "type": "tstzrange",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "tstzrange(\"starts_at\", \"ends_at\", '[)')",
+            "type": "stored"
+          }
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "time_off_tenant_staff_during_idx": {
+          "name": "time_off_tenant_staff_during_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "staff_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "during",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "gist",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "time_off_staff_fk": {
+          "name": "time_off_staff_fk",
+          "tableFrom": "time_off",
+          "tableTo": "staff",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id",
+            "staff_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "time_off_kind_valid": {
+          "name": "time_off_kind_valid",
+          "value": "\"app\".\"time_off\".\"kind\" IN ('time_off', 'vacation', 'training', 'blocked')"
+        },
+        "time_off_order": {
+          "name": "time_off_order",
+          "value": "\"app\".\"time_off\".\"ends_at\" > \"app\".\"time_off\".\"starts_at\""
+        },
+        "time_off_instant_precision": {
+          "name": "time_off_instant_precision",
+          "value": "date_trunc('milliseconds', \"app\".\"time_off\".\"starts_at\") = \"app\".\"time_off\".\"starts_at\" AND date_trunc('milliseconds', \"app\".\"time_off\".\"ends_at\") = \"app\".\"time_off\".\"ends_at\""
+        },
+        "time_off_max_length": {
+          "name": "time_off_max_length",
+          "value": "\"app\".\"time_off\".\"ends_at\" - \"app\".\"time_off\".\"starts_at\" <= interval '400 days'"
+        },
+        "time_off_note_length": {
+          "name": "time_off_note_length",
+          "value": "char_length(\"app\".\"time_off\".\"note\") BETWEEN 1 AND 200"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "app.working_hours": {
+      "name": "working_hours",
+      "schema": "app",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "NULLIF(current_setting('app.tenant_id', true), '')::uuid"
+        },
+        "staff_id": {
+          "name": "staff_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "location_id": {
+          "name": "location_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "weekday": {
+          "name": "weekday",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "start_time": {
+          "name": "start_time",
+          "type": "time",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "end_time": {
+          "name": "end_time",
+          "type": "time",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "valid_from": {
+          "name": "valid_from",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "valid_until": {
+          "name": "valid_until",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "working_hours_tenant_location_idx": {
+          "name": "working_hours_tenant_location_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "location_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "working_hours_staff_fk": {
+          "name": "working_hours_staff_fk",
+          "tableFrom": "working_hours",
+          "tableTo": "staff",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id",
+            "staff_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "working_hours_location_fk": {
+          "name": "working_hours_location_fk",
+          "tableFrom": "working_hours",
+          "tableTo": "locations",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id",
+            "location_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "working_hours_weekday_range": {
+          "name": "working_hours_weekday_range",
+          "value": "\"app\".\"working_hours\".\"weekday\" BETWEEN 1 AND 7"
+        },
+        "working_hours_time_order": {
+          "name": "working_hours_time_order",
+          "value": "\"app\".\"working_hours\".\"end_time\" > \"app\".\"working_hours\".\"start_time\""
+        },
+        "working_hours_whole_minutes": {
+          "name": "working_hours_whole_minutes",
+          "value": "extract(second FROM \"app\".\"working_hours\".\"start_time\") = 0 AND extract(second FROM \"app\".\"working_hours\".\"end_time\") = 0"
+        },
+        "working_hours_validity_order": {
+          "name": "working_hours_validity_order",
+          "value": "\"app\".\"working_hours\".\"valid_until\" IS NULL OR \"app\".\"working_hours\".\"valid_until\" >= \"app\".\"working_hours\".\"valid_from\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "app.customers": {
+      "name": "customers",
+      "schema": "app",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "NULLIF(current_setting('app.tenant_id', true), '')::uuid"
+        },
+        "full_name": {
+          "name": "full_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "phone_e164": {
+          "name": "phone_e164",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "whatsapp_opt_in_at": {
+          "name": "whatsapp_opt_in_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "marketing_consent_at": {
+          "name": "marketing_consent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "privacy_notice_version": {
+          "name": "privacy_notice_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "anonymized_at": {
+          "name": "anonymized_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "customers_tenant_phone_key": {
+          "name": "customers_tenant_phone_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "phone_e164",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"app\".\"customers\".\"phone_e164\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "customers_tenant_name_idx": {
+          "name": "customers_tenant_name_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lower(\"full_name\")",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "customers_tenant_fk": {
+          "name": "customers_tenant_fk",
+          "tableFrom": "customers",
+          "tableTo": "tenants",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "customers_tenant_id_id_key": {
+          "name": "customers_tenant_id_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "customers_full_name_length": {
+          "name": "customers_full_name_length",
+          "value": "char_length(\"app\".\"customers\".\"full_name\") BETWEEN 1 AND 120"
+        },
+        "customers_phone_e164": {
+          "name": "customers_phone_e164",
+          "value": "\"app\".\"customers\".\"phone_e164\" ~ '^\\+[1-9][0-9]{7,14}$'"
+        },
+        "customers_email_format": {
+          "name": "customers_email_format",
+          "value": "\"app\".\"customers\".\"email\" = lower(\"app\".\"customers\".\"email\") AND char_length(\"app\".\"customers\".\"email\") <= 254 AND \"app\".\"customers\".\"email\" ~ '^[^@[:space:]]+@[^@[:space:]]+[.][^@[:space:]]+$'"
+        },
+        "customers_privacy_notice_version_length": {
+          "name": "customers_privacy_notice_version_length",
+          "value": "char_length(\"app\".\"customers\".\"privacy_notice_version\") BETWEEN 1 AND 32"
+        },
+        "customers_anonymized_without_contact": {
+          "name": "customers_anonymized_without_contact",
+          "value": "\"app\".\"customers\".\"anonymized_at\" IS NULL OR (\"app\".\"customers\".\"phone_e164\" IS NULL AND \"app\".\"customers\".\"email\" IS NULL AND \"app\".\"customers\".\"whatsapp_opt_in_at\" IS NULL AND \"app\".\"customers\".\"marketing_consent_at\" IS NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "app.locations": {
+      "name": "locations",
+      "schema": "app",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "NULLIF(current_setting('app.tenant_id', true), '')::uuid"
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slug": {
+          "name": "slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "timezone": {
+          "name": "timezone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'America/Sao_Paulo'"
+        },
+        "phone_e164": {
+          "name": "phone_e164",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "slot_interval_min": {
+          "name": "slot_interval_min",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 15
+        },
+        "min_notice_min": {
+          "name": "min_notice_min",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 120
+        },
+        "max_advance_days": {
+          "name": "max_advance_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 60
+        },
+        "active": {
+          "name": "active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "locations_tenant_fk": {
+          "name": "locations_tenant_fk",
+          "tableFrom": "locations",
+          "tableTo": "tenants",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "locations_tenant_id_id_key": {
+          "name": "locations_tenant_id_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        },
+        "locations_tenant_id_slug_key": {
+          "name": "locations_tenant_id_slug_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "slug"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "locations_name_length": {
+          "name": "locations_name_length",
+          "value": "char_length(\"app\".\"locations\".\"name\") BETWEEN 1 AND 120"
+        },
+        "locations_slug_format": {
+          "name": "locations_slug_format",
+          "value": "\"app\".\"locations\".\"slug\" ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'"
+        },
+        "locations_timezone_valid": {
+          "name": "locations_timezone_valid",
+          "value": "app_private.is_valid_iana_timezone(\"app\".\"locations\".\"timezone\")"
+        },
+        "locations_phone_e164": {
+          "name": "locations_phone_e164",
+          "value": "\"app\".\"locations\".\"phone_e164\" ~ '^\\+[1-9][0-9]{7,14}$'"
+        },
+        "locations_slot_interval_valid": {
+          "name": "locations_slot_interval_valid",
+          "value": "\"app\".\"locations\".\"slot_interval_min\" IN (5, 10, 15, 20, 30, 60)"
+        },
+        "locations_min_notice_range": {
+          "name": "locations_min_notice_range",
+          "value": "\"app\".\"locations\".\"min_notice_min\" BETWEEN 0 AND 43200"
+        },
+        "locations_max_advance_range": {
+          "name": "locations_max_advance_range",
+          "value": "\"app\".\"locations\".\"max_advance_days\" BETWEEN 1 AND 365"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "app.services": {
+      "name": "services",
+      "schema": "app",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "NULLIF(current_setting('app.tenant_id', true), '')::uuid"
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "duration_min": {
+          "name": "duration_min",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "phases": {
+          "name": "phases",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "buffer_before_min": {
+          "name": "buffer_before_min",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "buffer_after_min": {
+          "name": "buffer_after_min",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "price_cents": {
+          "name": "price_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "commission_bps": {
+          "name": "commission_bps",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "online_bookable": {
+          "name": "online_bookable",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "active": {
+          "name": "active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "services_tenant_fk": {
+          "name": "services_tenant_fk",
+          "tableFrom": "services",
+          "tableTo": "tenants",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "services_tenant_id_id_key": {
+          "name": "services_tenant_id_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "services_name_length": {
+          "name": "services_name_length",
+          "value": "char_length(\"app\".\"services\".\"name\") BETWEEN 1 AND 120"
+        },
+        "services_duration_range": {
+          "name": "services_duration_range",
+          "value": "\"app\".\"services\".\"duration_min\" BETWEEN 5 AND 720"
+        },
+        "services_phases_valid": {
+          "name": "services_phases_valid",
+          "value": "app_private.service_phases_are_valid(\"app\".\"services\".\"phases\", \"app\".\"services\".\"duration_min\")"
+        },
+        "services_buffer_before_range": {
+          "name": "services_buffer_before_range",
+          "value": "\"app\".\"services\".\"buffer_before_min\" BETWEEN 0 AND 240"
+        },
+        "services_buffer_after_range": {
+          "name": "services_buffer_after_range",
+          "value": "\"app\".\"services\".\"buffer_after_min\" BETWEEN 0 AND 240"
+        },
+        "services_price_range": {
+          "name": "services_price_range",
+          "value": "\"app\".\"services\".\"price_cents\" BETWEEN 0 AND 100000000"
+        },
+        "services_commission_range": {
+          "name": "services_commission_range",
+          "value": "\"app\".\"services\".\"commission_bps\" BETWEEN 0 AND 10000"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "app.staff_services": {
+      "name": "staff_services",
+      "schema": "app",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "NULLIF(current_setting('app.tenant_id', true), '')::uuid"
+        },
+        "staff_id": {
+          "name": "staff_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "price_cents": {
+          "name": "price_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "duration_min": {
+          "name": "duration_min",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "commission_bps": {
+          "name": "commission_bps",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "active": {
+          "name": "active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "staff_services_tenant_service_idx": {
+          "name": "staff_services_tenant_service_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "service_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "staff_services_staff_fk": {
+          "name": "staff_services_staff_fk",
+          "tableFrom": "staff_services",
+          "tableTo": "staff",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id",
+            "staff_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "staff_services_service_fk": {
+          "name": "staff_services_service_fk",
+          "tableFrom": "staff_services",
+          "tableTo": "services",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id",
+            "service_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "staff_services_tenant_staff_service_key": {
+          "name": "staff_services_tenant_staff_service_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "staff_id",
+            "service_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "staff_services_price_range": {
+          "name": "staff_services_price_range",
+          "value": "\"app\".\"staff_services\".\"price_cents\" BETWEEN 0 AND 100000000"
+        },
+        "staff_services_duration_range": {
+          "name": "staff_services_duration_range",
+          "value": "\"app\".\"staff_services\".\"duration_min\" BETWEEN 5 AND 720"
+        },
+        "staff_services_commission_range": {
+          "name": "staff_services_commission_range",
+          "value": "\"app\".\"staff_services\".\"commission_bps\" BETWEEN 0 AND 10000"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "app.staff": {
+      "name": "staff",
+      "schema": "app",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "NULLIF(current_setting('app.tenant_id', true), '')::uuid"
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "engagement_type": {
+          "name": "engagement_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "phone_e164": {
+          "name": "phone_e164",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "default_commission_bps": {
+          "name": "default_commission_bps",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "bookable_online": {
+          "name": "bookable_online",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "active": {
+          "name": "active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "staff_tenant_fk": {
+          "name": "staff_tenant_fk",
+          "tableFrom": "staff",
+          "tableTo": "tenants",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "staff_tenant_id_id_key": {
+          "name": "staff_tenant_id_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "staff_display_name_length": {
+          "name": "staff_display_name_length",
+          "value": "char_length(\"app\".\"staff\".\"display_name\") BETWEEN 1 AND 80"
+        },
+        "staff_engagement_type_valid": {
+          "name": "staff_engagement_type_valid",
+          "value": "\"app\".\"staff\".\"engagement_type\" IN ('owner', 'employee', 'partner', 'freelancer')"
+        },
+        "staff_phone_e164": {
+          "name": "staff_phone_e164",
+          "value": "\"app\".\"staff\".\"phone_e164\" ~ '^\\+[1-9][0-9]{7,14}$'"
+        },
+        "staff_default_commission_range": {
+          "name": "staff_default_commission_range",
+          "value": "\"app\".\"staff\".\"default_commission_bps\" BETWEEN 0 AND 10000"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "app.tenants": {
+      "name": "tenants",
+      "schema": "app",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "slug": {
+          "name": "slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'trial'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "tenants_slug_key": {
+          "name": "tenants_slug_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "slug"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "tenants_slug_format": {
+          "name": "tenants_slug_format",
+          "value": "\"app\".\"tenants\".\"slug\" ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'"
+        },
+        "tenants_name_length": {
+          "name": "tenants_name_length",
+          "value": "char_length(\"app\".\"tenants\".\"name\") BETWEEN 1 AND 120"
+        },
+        "tenants_status_valid": {
+          "name": "tenants_status_valid",
+          "value": "\"app\".\"tenants\".\"status\" IN ('trial', 'active', 'suspended', 'closed')"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {
+    "app": "app"
+  },
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

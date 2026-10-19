@@ -1,0 +1,165 @@
+// Renovate (Mend Renovate App). Atualiza dependências npm (inclusive o catálogo do
+// pnpm-workspace.yaml e o campo packageManager), actions e imagens dos workflows.
+//
+// Por que Renovate e não Dependabot para updates: a doc do Dependabot só lista pnpm até a v10;
+// o Renovate entende pnpm 11, aplica quarentena por idade, mantém pins por SHA/digest e, em PR
+// de vulnerabilidade, inclui a versão em `minimumReleaseAgeExclude` do pnpm-workspace.yaml.
+// Os "Dependabot alerts" continuam ligados nas configurações do repositório: o Renovate os lê
+// (vulnerabilityAlerts). Ver .github/rulesets/README.md.
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  // best-practices = recommended + docker:pinDigests + helpers:pinGitHubActionDigests
+  //   + :configMigration + :pinDevDependencies + abandonments:recommended
+  //   + security:minimumReleaseAgeNpm (3 dias) + :maintainLockFilesWeekly
+  extends: ['config:best-practices', ':semanticCommits'],
+  timezone: 'America/Sao_Paulo',
+  // Segunda de madrugada (horário de São Paulo). PRs de vulnerabilidade ignoram o agendamento.
+  schedule: ['* 0-5 * * 1'],
+  labels: ['dependencies'],
+  dependencyDashboard: true,
+  // Commits pela API do GitHub saem "Verified": exigência do ruleset (commits assinados).
+  platformCommit: 'enabled',
+  prConcurrentLimit: 8,
+  prHourlyLimit: 4,
+  // Versões exatas, como o saveExact do pnpm-workspace.yaml.
+  rangeStrategy: 'pin',
+  // Quarentena alinhada ao minimumReleaseAge: 4320 (3 dias) do pnpm-workspace.yaml. Com
+  // "strict", o PR só é aberto quando a versão já passou da quarentena.
+  minimumReleaseAge: '3 days',
+  internalChecksFilter: 'strict',
+  postUpdateOptions: ['pnpmDedupe'],
+  // Alertas do OSV (inclui detecção experimental de pacote malicioso, que bloqueia o PR).
+  osvVulnerabilityAlerts: true,
+  vulnerabilityAlerts: {
+    // Correção de vulnerabilidade não espera quarentena nem agendamento.
+    minimumReleaseAge: null,
+    schedule: ['at any time'],
+    labels: ['dependencies', 'security'],
+    prConcurrentLimit: 5,
+  },
+  customManagers: [
+    {
+      description: 'Imagens Docker pinadas por digest fora de `image:` (docker run, env como GITLEAKS_IMAGE e OSV_IMAGE, docker_name)',
+      customType: 'regex',
+      managerFilePatterns: ['/^\\.github/workflows/[^/]+\\.ya?ml$/'],
+      matchStrings: [
+        '(?:docker_name|[A-Z_]+_IMAGE):\\s*(?<depName>[a-z0-9][a-z0-9./_-]*):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})',
+        '\\n\\s+(?<depName>[a-z0-9][a-z0-9.-]*/[a-z0-9./_-]+):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})\\s*\\\\?\\n',
+      ],
+      datasourceTemplate: 'docker',
+      versioningTemplate: 'docker',
+    },
+    {
+      description: 'Versões de ferramenta passadas a actions (`# renovate:` na linha anterior ao `version:`)',
+      customType: 'regex',
+      managerFilePatterns: ['/^\\.github/workflows/[^/]+\\.ya?ml$/'],
+      matchStrings: [
+        '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+version:\\s*(?<currentValue>\\S+)',
+      ],
+    },
+  ],
+  packageRules: [
+    {
+      description: 'GitHub Actions: pin por SHA (comentário # vX.Y.Z), 7 dias de quarentena, um PR agrupado',
+      matchManagers: ['github-actions'],
+      minimumReleaseAge: '7 days',
+      groupName: 'github-actions',
+    },
+    {
+      description: 'Imagens Docker e ferramentas dos workflows: digest + 7 dias',
+      matchDatasources: ['docker', 'github-releases', 'pypi'],
+      minimumReleaseAge: '7 days',
+    },
+    {
+      description: 'Ferramentas de segurança dos workflows andam juntas (a zizmor-action só aceita versões que conhece)',
+      matchPackageNames: [
+        'zizmorcore/zizmor-action',
+        'zizmor',
+        'aquasecurity/trivy-action',
+        'aquasecurity/trivy',
+        'semgrep/semgrep',
+        'ghcr.io/gitleaks/gitleaks',
+        'ghcr.io/google/osv-scanner',
+        'rhysd/actionlint',
+        'ghcr.io/zaproxy/zaproxy',
+      ],
+      groupName: 'security-tooling',
+    },
+    {
+      // Precisa vir DEPOIS da regra de github-actions: o serviço do ci.yml é extraído pelo
+      // manager github-actions e cairia no grupo dele; o compose.yaml, pelo docker-compose.
+      description: 'PostgreSQL de teste: mesma imagem e digest no ci.yml (serviço do test-db) e no compose.yaml, num PR só; fica na major 18 (o schema também roda em 16 local)',
+      matchDatasources: ['docker'],
+      matchPackageNames: ['postgres'],
+      allowedVersions: '<19',
+      groupName: 'postgres-test-image',
+    },
+    {
+      description: 'Majors: 14 dias e aprovação manual no Dependency Dashboard',
+      matchUpdateTypes: ['major'],
+      minimumReleaseAge: '14 days',
+      dependencyDashboardApproval: true,
+    },
+    {
+      description: '@types/node acompanha a major do Node em produção (.nvmrc)',
+      matchPackageNames: ['@types/node'],
+      allowedVersions: '<25',
+    },
+    {
+      description: 'Node (.nvmrc) só em versões LTS pares',
+      matchDatasources: ['node-version'],
+      allowedVersions: '/^(24|26|28)(\\.|$)/',
+    },
+    {
+      description: 'Next.js e React andam juntos',
+      matchPackageNames: [
+        'next',
+        '@next/**',
+        'react',
+        'react-dom',
+        '@types/react',
+        '@types/react-dom',
+        'eslint-plugin-react-hooks',
+      ],
+      groupName: 'next-react',
+    },
+    {
+      description: 'Camada de dados (schema e migrações revisados juntos)',
+      matchPackageNames: ['drizzle-orm', 'drizzle-kit', 'pg', '@types/pg'],
+      groupName: 'drizzle-pg',
+    },
+    {
+      description: 'Ferramentas de teste',
+      matchPackageNames: [
+        'vitest',
+        '@vitest/**',
+        '@playwright/test',
+        'playwright',
+        '@axe-core/**',
+        'fast-check',
+        '@fast-check/**',
+      ],
+      groupName: 'test-tooling',
+    },
+    {
+      description: 'Lint, formatação e tipos',
+      matchPackageNames: [
+        '@biomejs/biome',
+        'eslint',
+        '@eslint/**',
+        'typescript-eslint',
+        'eslint-plugin-security',
+        'globals',
+        'typescript',
+        'knip',
+      ],
+      groupName: 'lint-tooling',
+    },
+    {
+      description: 'O próprio pnpm (campo packageManager com hash): 7 dias',
+      matchPackageNames: ['pnpm'],
+      minimumReleaseAge: '7 days',
+      groupName: 'pnpm',
+    },
+  ],
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/knip/schema.json",
+  "ignore": [
+    ".semgrep/**"
+  ],
+  "workspaces": {
+    ".": {
+      "entry": [
+        "eslint.base.mjs",
+        ".claude/hooks/*.mjs",
+        ".claude/hooks/test/**/*.test.mjs"
+      ]
+    },
+    "apps/web": {},
+    "packages/*": {}
+  }
+}

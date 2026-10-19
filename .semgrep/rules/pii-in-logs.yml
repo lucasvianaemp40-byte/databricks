@@ -1,0 +1,93 @@
+# Dado pessoal em log, Sentry ou analytics (LGPD: minimização e segurança, Art. 6º III e VII;
+# ASVS 16.2.5).
+#
+# Logs, Sentry e analytics recebem IDs opacos (tenantId, customerId, appointmentId), nunca
+# nome, telefone, e-mail, CPF/CNPJ, data de nascimento, endereço, observações de atendimento,
+# tokens ou senhas. Registro inteiro de cliente/usuário também conta como dado pessoal.
+#
+# A regra olha QUALQUER subexpressão dos argumentos do sink: concatenação, template,
+# JSON.stringify, objeto aninhado ou sob chave genérica ({ data: customer }), spread, acesso
+# por colchete e colunas em snake_case (linha crua de sql`...`, sem o mapeamento do Drizzle).
+# Acessar um subcampo (customer.id, ctx.customer.id, customers.length) não expõe o registro.
+#
+# "name" sozinho é ambíguo (err.name, service.name, job.name): só conta quando o objeto é
+# uma pessoa (customer, user, staff, professional...).
+#
+# Limite conhecido: um helper de mascaramento, como redact(customer), também é acusado. Use
+# `// nosemgrep: pii-in-logs -- <motivo>` na linha e explique no PR.
+rules:
+  - id: pii-in-logs
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Possível dado pessoal ou segredo ('$FIELD') enviado para log, Sentry ou analytics. Pela
+      LGPD, registre só IDs opacos (tenantId, customerId, appointmentId) e o motivo do evento. Se
+      precisar correlacionar um titular, use o ID dele.
+    patterns:
+      # Qualquer subexpressão dos argumentos de um sink de log/observabilidade/analytics.
+      - pattern-inside: $LOGGER.$LEVEL(...)
+      - metavariable-regex:
+          metavariable: $LOGGER
+          # console, logger, log, this.logger, ctx.log, requestLogger, Sentry, scope,
+          # Sentry.getCurrentScope(), posthog, analytics.
+          # (metavariable-regex é ancorado no início: daí o ^(.*\.)?)
+          regex: (?i)^(.*\.)?(console|log|logger|\w*logger|sentry|scope|get\w*scope\(\)|posthog|analytics)$
+      - metavariable-regex:
+          metavariable: $LEVEL
+          regex: ^(log|info|warn|error|debug|trace|fatal|dir|table|captureMessage|captureException|captureEvent|setUser|setContext|setExtra|setExtras|setTag|setTags|addBreadcrumb|capture|track|identify)$
+      - pattern-either:
+          # Os três ramos abaixo ligam $FIELD a um nome pessoal; a lista de nomes fica num lugar
+          # só (o metavariable-regex depois deles). Sem âncora/alias YAML (&pii/*pii): o
+          # validador do semgrep-core não os resolve e acusa RuleParseError a cada execução.
+          - patterns:
+              - pattern-either:
+                  # Campo pessoal acessado por ponto ou colchete (customer.email,
+                  # row.phone_e164, customer['email'], user.email.toLowerCase()).
+                  - patterns:
+                      - pattern-either:
+                          - pattern: $OBJ.$FIELD
+                          - pattern: $OBJ["$FIELD"]
+                          - pattern: $OBJ.$FIELD.$METHOD(...)
+                      # ctx.customer.id e user.email.length acessam um subcampo, não o dado.
+                      - pattern-not-inside: $OBJ.$FIELD.$PROP
+                  # Identificador com nome pessoal (email, customer, phone...) como argumento,
+                  # operando de concatenação, interpolação, valor de propriedade, spread ou
+                  # argumento de função (JSON.stringify(customer)).
+                  - patterns:
+                      - pattern: $FIELD
+                      - pattern-not-inside: $FIELD.$PROP
+                  # Chave de objeto com nome pessoal ({ email: valor }, { phone_e164 }), salvo
+                  # literal de texto, que é nome de evento/estado e não dado pessoal
+                  # ({ email: 'desligado' }).
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '{..., $FIELD: $VALUE, ...}'
+                          - pattern: '{..., $FIELD, ...}'
+                      - pattern-not: '{..., $FIELD: "...", ...}'
+              - metavariable-regex:
+                  metavariable: $FIELD
+                  regex: (?i)^(cpf|cnpj|rg|phones?|phone_?number|phone_?e164|mobile|telefone|celular|whatsapp|emails?|e_?mail|email_?address|full_?name|first_?name|last_?name|nome|nome_?completo|birth_?date|birthday|date_?of_?birth|data_?nascimento|address|endereco|notes|observacoes|anamnese|customers?|clientes?|user|password|senha|token|access_?token|refresh_?token|secret|api_?key)$
+          # "name" de uma pessoa.
+          - patterns:
+              - pattern-either:
+                  - pattern: $OBJ.$FIELD
+                  - pattern: $OBJ.$FIELD.$METHOD(...)
+              - metavariable-regex:
+                  metavariable: $FIELD
+                  regex: ^(name|displayName|socialName)$
+              - metavariable-regex:
+                  metavariable: $OBJ
+                  regex: (?i)^(.*\.)?(customer|cliente|client|user|usuario|staff|professional|profissional|member|owner|dono|person|pessoa|contact|contato|titular|recipient|guest)s?$
+              - pattern-not-inside: $OBJ.$FIELD.$PROP
+    metadata:
+      category: security
+      subcategory: [audit]
+      cwe:
+        - "CWE-532: Insertion of Sensitive Information into Log File"
+      owasp:
+        - "A09:2025 - Security Logging and Alerting Failures"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://www.planalto.gov.br/ccivil_03/_ato2015-2018/2018/lei/l13709.htm
