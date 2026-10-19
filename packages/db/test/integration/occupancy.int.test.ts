@@ -79,6 +79,97 @@ describe('ocupação do profissional: EXCLUDE anti-overbooking', () => {
     return row.active;
   }
 
+  /**
+   * Reserva completa (visita, item e ocupação) pelo SQL da aplicação, numa sessão própria com
+   * transação aberta: os testes de corrida entrelaçam transações à mão.
+   */
+  async function bookInSession(
+    client: pg.PoolClient,
+    staffId: string,
+    startsAt: Date,
+    endsAt: Date,
+    fixture: TenantFixture = tenant,
+  ) {
+    const appointment = first(
+      (
+        await client.query<{ id: string }>(
+          `INSERT INTO app.appointments (location_id, customer_id, status, source, starts_at,
+              ends_at, local_starts_at, local_utc_offset_seconds, timezone, idempotency_key)
+           VALUES ($1, $2, 'confirmed', 'staff', $3, $4, $5, $6, $7, $8) RETURNING id`,
+          [
+            fixture.locationId,
+            fixture.customerId,
+            startsAt,
+            endsAt,
+            wallTime(startsAt),
+            utcOffsetSeconds(startsAt),
+            TIMEZONE,
+            randomIdempotencyKey(),
+          ],
+        )
+      ).rows,
+    );
+    const item = first(
+      (
+        await client.query<{ id: string }>(
+          `INSERT INTO app.appointment_items (appointment_id, position, service_id, staff_id,
+              service_name, duration_min, phases, price_cents, commission_bps, starts_at, ends_at)
+           VALUES ($1, 1, $2, $3, 'Corte', 60, '[{"kind": "work", "minutes": 60}]', 6000, 4000,
+                   $4, $5) RETURNING id`,
+          [appointment.id, fixture.serviceId, staffId, startsAt, endsAt],
+        )
+      ).rows,
+    );
+    return client.query(
+      `INSERT INTO app.occupancies (appointment_id, appointment_item_id, staff_id, starts_at, ends_at)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [appointment.id, item.id, staffId, startsAt, endsAt],
+    );
+  }
+
+  /** Transação aberta numa conexão própria, já no contexto do tenant. */
+  async function openSession(fixture: TenantFixture = tenant) {
+    const client = await db.$client.connect();
+    await client.query('BEGIN');
+    await client.query("SELECT set_config('app.tenant_id', $1, true)", [fixture.tenantId]);
+    const { rows } = await client.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+    return { client, pid: first(rows).pid };
+  }
+
+  /** Desfaz o que ficou aberto (inclusive depois de uma asserção que falhou) e devolve as conexões. */
+  async function closeSessions(...sessions: { client: pg.PoolClient }[]) {
+    for (const { client } of sessions) {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+  }
+
+  /**
+   * Espera, sem sleep fixo, a sessão `pid` ficar bloqueada num lock e devolve qual
+   * (`advisory`, `transactionid`...); `null` se ela não bloqueou em ~2 s.
+   */
+  async function lockWaitOf(pid: number): Promise<string | null> {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const { rows } = await admin.query<{ event: string | null }>(
+        "SELECT wait_event AS event FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock'",
+        [pid],
+      );
+      if (rows[0] !== undefined) {
+        return rows[0].event;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    return null;
+  }
+
+  /** 'ok' se concluiu; senão, o SQLSTATE do erro do banco. */
+  function settle(operation: Promise<unknown>): Promise<string | undefined> {
+    return operation.then(
+      () => 'ok',
+      (error: unknown) => sqlStateOf(error),
+    );
+  }
+
   it('sobreposição parcial com o mesmo profissional => 23P01 (SlotUnavailableError)', async () => {
     const [ana] = tenant.staffIds;
     await book(ana, '2027-02-01T13:00:00Z', '2027-02-01T14:00:00Z');
@@ -191,44 +282,6 @@ describe('ocupação do profissional: EXCLUDE anti-overbooking', () => {
     const endsAt = at('2027-02-09T14:00:00Z');
     const firstClient = await db.$client.connect();
     const secondClient = await db.$client.connect();
-    // Reserva completa (visita, item e ocupação) pelo SQL da aplicação, em sessão própria.
-    const bookVia = async (client: pg.PoolClient) => {
-      const appointment = first(
-        (
-          await client.query<{ id: string }>(
-            `INSERT INTO app.appointments (location_id, customer_id, status, source, starts_at,
-                ends_at, local_starts_at, local_utc_offset_seconds, timezone, idempotency_key)
-             VALUES ($1, $2, 'confirmed', 'staff', $3, $4, $5, $6, $7, $8) RETURNING id`,
-            [
-              tenant.locationId,
-              tenant.customerId,
-              startsAt,
-              endsAt,
-              wallTime(startsAt),
-              utcOffsetSeconds(startsAt),
-              TIMEZONE,
-              randomIdempotencyKey(),
-            ],
-          )
-        ).rows,
-      );
-      const item = first(
-        (
-          await client.query<{ id: string }>(
-            `INSERT INTO app.appointment_items (appointment_id, position, service_id, staff_id,
-                service_name, duration_min, phases, price_cents, commission_bps, starts_at, ends_at)
-             VALUES ($1, 1, $2, $3, 'Corte', 60, '[{"kind": "work", "minutes": 60}]', 6000, 4000,
-                     $4, $5) RETURNING id`,
-            [appointment.id, tenant.serviceId, ana, startsAt, endsAt],
-          )
-        ).rows,
-      );
-      return client.query(
-        `INSERT INTO app.occupancies (appointment_id, appointment_item_id, staff_id, starts_at, ends_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [appointment.id, item.id, ana, startsAt, endsAt],
-      );
-    };
     try {
       for (const client of [firstClient, secondClient]) {
         await client.query('BEGIN');
@@ -239,8 +292,8 @@ describe('ocupação do profissional: EXCLUDE anti-overbooking', () => {
       );
       const secondPid = pidRows[0]?.pid;
 
-      await bookVia(firstClient);
-      const pending = bookVia(secondClient).then(
+      await bookInSession(firstClient, ana, startsAt, endsAt);
+      const pending = bookInSession(secondClient, ana, startsAt, endsAt).then(
         () => 'committed-without-conflict',
         (error: unknown) => sqlStateOf(error),
       );
@@ -293,6 +346,148 @@ describe('ocupação do profissional: EXCLUDE anti-overbooking', () => {
       [tenant.tenantId, bruno],
     );
     expect(rows[0]?.n).toBe(1);
+  });
+
+  it('agenda do profissional em fila: a 2ª reserva espera a 1ª terminar, mesmo em outro horário', async () => {
+    // O EXCLUDE grava no índice antes de procurar conflito. Sem a fila, duas reservas cruzadas
+    // (uma pega 13h e quer 15h, a outra pega 15h e quer 13h) esperam uma pela outra e o
+    // PostgreSQL aborta uma com deadlock (40P01) em vez de 23P01. Visto no CI com 6 reservas
+    // simultâneas do mesmo horário.
+    const [ana] = tenant.staffIds;
+    const morning = [at('2027-02-11T13:00:00Z'), at('2027-02-11T14:00:00Z')] as const;
+    const afternoon = [at('2027-02-11T15:00:00Z'), at('2027-02-11T16:00:00Z')] as const;
+    const holder = await openSession();
+    const waiting = await openSession();
+    try {
+      await bookInSession(holder.client, ana, ...morning);
+      const waitingAfternoon = settle(bookInSession(waiting.client, ana, ...afternoon));
+      expect(await lockWaitOf(waiting.pid)).toBe('advisory');
+      // A 1ª segue sem esperar ninguém: a 2ª ainda não gravou ocupação.
+      await bookInSession(holder.client, ana, ...afternoon);
+      await holder.client.query('COMMIT');
+      expect(await waitingAfternoon).toBe('23P01');
+    } finally {
+      await closeSessions(holder, waiting);
+    }
+  });
+
+  it('a fila é só do profissional: outro profissional e outro tenant não esperam', async () => {
+    const [ana, bruno] = tenant.staffIds;
+    const slot = [at('2027-02-12T13:00:00Z'), at('2027-02-12T14:00:00Z')] as const;
+    const holder = await openSession();
+    const sameSalon = await openSession();
+    const otherSalon = await openSession(otherTenant);
+    try {
+      await bookInSession(holder.client, ana, ...slot);
+      for (const { client } of [sameSalon, otherSalon]) {
+        // Se entrasse na fila da Ana, estouraria o lock_timeout (55P03) em vez de concluir.
+        await client.query("SET LOCAL lock_timeout = '1s'");
+      }
+      expect(await settle(bookInSession(sameSalon.client, bruno, ...slot))).toBe('ok');
+      expect(
+        await settle(
+          bookInSession(otherSalon.client, otherTenant.staffIds[0], ...slot, otherTenant),
+        ),
+      ).toBe('ok');
+    } finally {
+      await closeSessions(holder, sameSalon, otherSalon);
+    }
+  });
+
+  it('reativar um agendamento também entra na fila do profissional', async () => {
+    const [ana] = tenant.staffIds;
+    const hold = await book(ana, '2027-02-13T13:00:00Z', '2027-02-13T14:00:00Z', 'pending');
+    await withTenant(
+      worker,
+      tenant.tenantId,
+      (tx) =>
+        tx
+          .update(appointments)
+          .set({ status: 'expired' })
+          .where(eq(appointments.id, hold.appointmentId)),
+      { actor: { type: 'system', id: 'job:expire-holds' } },
+    );
+    const holder = await openSession();
+    const reactivation = await openSession();
+    try {
+      await bookInSession(
+        holder.client,
+        ana,
+        at('2027-02-13T15:00:00Z'),
+        at('2027-02-13T16:00:00Z'),
+      );
+      const confirmed = settle(
+        reactivation.client.query(
+          "UPDATE app.appointments SET status = 'confirmed' WHERE id = $1",
+          [hold.appointmentId],
+        ),
+      );
+      expect(await lockWaitOf(reactivation.pid)).toBe('advisory');
+      await holder.client.query('COMMIT');
+      expect(await confirmed).toBe('ok');
+      await reactivation.client.query('COMMIT');
+      expect(await occupancyActive(hold.occupancyId)).toBe(true);
+    } finally {
+      await closeSessions(holder, reactivation);
+    }
+  });
+
+  it('reservas com profissionais em ordem inversa: o deadlock da fila é repetido e as duas concluem', async () => {
+    // A fila vale para a agenda inteira do profissional: (Ana, Bruno) contra (Bruno, Ana) se
+    // travam mesmo sem sobreposição de horário, e o PostgreSQL aborta uma (40P01).
+    const [ana, bruno] = tenant.staffIds;
+    let callbacks = 0;
+    let holdingFirst = 0;
+    const bothHoldFirst = Promise.withResolvers<undefined>();
+    const bookBoth = (firstStaff: string, secondStaff: string, day: string) =>
+      withTenant(db, tenant.tenantId, async (tx) => {
+        callbacks += 1;
+        await bookAppointment(tx, tenant, {
+          staffId: firstStaff,
+          startsAt: at(`${day}T13:00:00Z`),
+          endsAt: at(`${day}T14:00:00Z`),
+        });
+        holdingFirst += 1;
+        if (holdingFirst === 2) {
+          bothHoldFirst.resolve(undefined);
+        }
+        // Na repetição a barreira já abriu: a vítima só espera a outra transação terminar.
+        await bothHoldFirst.promise;
+        return bookAppointment(tx, tenant, {
+          staffId: secondStaff,
+          startsAt: at(`${day}T15:00:00Z`),
+          endsAt: at(`${day}T16:00:00Z`),
+        });
+      });
+
+    const booked = await Promise.all([
+      bookBoth(ana, bruno, '2027-02-14'),
+      bookBoth(bruno, ana, '2027-02-15'),
+    ]);
+    expect(booked).toHaveLength(2);
+    // 3 = a vítima do deadlock rodou de novo (sem a repetição, uma das duas falharia com 40P01).
+    expect(callbacks).toBe(3);
+  });
+
+  it('catálogo: a fila roda depois da derivação de `active` (BEFORE dispara em ordem de nome)', async () => {
+    const { rows } = await admin.query<{ name: string; definition: string; enabled: string }>(
+      `SELECT t.tgname AS name, pg_get_triggerdef(t.oid) AS definition, t.tgenabled AS enabled
+         FROM pg_trigger t
+        WHERE t.tgrelid = 'app.occupancies'::regclass AND NOT t.tgisinternal
+          AND (t.tgtype & 2) <> 0
+        ORDER BY t.tgname`,
+    );
+    const names = rows.map((row) => row.name);
+    expect(names).toContain('occupancies_derive_active');
+    expect(names.indexOf('occupancies_lock_staff_schedule')).toBeGreaterThan(
+      names.indexOf('occupancies_derive_active'),
+    );
+    expect(rows.find((row) => row.name === 'occupancies_lock_staff_schedule')).toEqual({
+      name: 'occupancies_lock_staff_schedule',
+      definition:
+        'CREATE TRIGGER occupancies_lock_staff_schedule BEFORE INSERT OR UPDATE ON app.occupancies FOR EACH ROW EXECUTE FUNCTION app_private.occupancies_lock_staff_schedule()',
+      enabled: 'O',
+    });
   });
 });
 

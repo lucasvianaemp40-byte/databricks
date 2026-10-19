@@ -226,9 +226,28 @@ horário de verão, estão no [README do core](../../packages/scheduling-core/RE
 ## 5. Concorrência
 
 A garantia contra dupla reserva é **declarativa no banco**: o `EXCLUDE` é serializado pelo
-índice GiST. Não precisa de `SERIALIZABLE` nem de lock manual. Verificado: duas transações
-concorrentes no mesmo horário fazem a segunda **esperar o commit** da primeira e receber
-`23P01`. Com RLS, o `DETAIL` não traz valores, e o `@salon/db` nem repassa o `DETAIL`.
+índice GiST. Não precisa de `SERIALIZABLE`. Verificado: duas transações concorrentes no mesmo
+horário fazem a segunda **esperar o commit** da primeira e receber `23P01`. Com RLS, o
+`DETAIL` não traz valores, e o `@salon/db` nem repassa o `DETAIL`.
+
+**Fila por profissional** [fundação, migração `0004_staff_schedule_lock`]. O `EXCLUDE` grava
+a entrada no índice antes de procurar conflito. Duas reservas simultâneas que se sobrepõem
+acham a entrada uma da outra, ainda sem commit, e cada uma espera a outra. O PostgreSQL
+resolve com deadlock (`40P01`) em vez de `23P01`, depois do `deadlock_timeout` de 1 s
+(comentário "Exclusion Constraints" em `src/backend/executor/execIndexing.c`). Isso apareceu
+no CI com 6 reservas simultâneas do mesmo horário e foi reproduzido com duas reservas
+cruzadas. Por isso, antes de gravar ocupação ativa (INSERT ou reativação), o trigger
+`occupancies_lock_staff_schedule` pega `pg_advisory_xact_lock` pelo hash do `staff_id`:
+
+- a 2ª reserva do mesmo profissional espera a 1ª terminar, mesmo em outro horário, e recebe
+  `23P01` na hora;
+- outro profissional e outro tenant não esperam;
+- o lock não decide nada sozinho: quem impede a sobreposição continua sendo o `EXCLUDE`.
+
+O deadlock que sobra (por exemplo, duas reservas com itens de profissionais diferentes
+gravados em ordem inversa) é transitório: `withTenant` repete a transação inteira, até 3
+tentativas, e só então lança `TransactionConflictError` (HTTP 503 com `Retry-After`). Grave
+as ocupações de uma reserva em ordem de `staff_id`.
 
 **Transação de reserva** [planejado, sobre os blocos da fundação]:
 
@@ -258,6 +277,8 @@ withTenant(db, tenantId, async (tx) => {
   item e que os itens cabem na visita (I20).
 - A transação roda em READ COMMITTED (fixo no `withTenant`): o `FOR SHARE` que deriva
   `active` depende disso para serializar a reserva com um cancelamento concorrente.
+- O callback pode rodar mais de uma vez (repetição em `40P01`/`40001`): nada de efeito fora
+  da transação dentro dele. Notificações vão pela fila do pg-boss na mesma transação (passo 5).
 - O `tx` só vale dentro do callback: nada de `after()`, `setTimeout` ou builder devolvido para
   executar depois, e `Promise.allSettled` em vez de `Promise.all` com ramos que podem falhar.
 

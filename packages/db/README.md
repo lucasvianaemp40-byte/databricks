@@ -40,6 +40,12 @@ const rows = await withTenant(
   em vez de voltar ao pool. Enquanto emprestada, a conexão tem um ouvinte de `error` (o pool
   tira o dele): uma queda no meio do callback (failover, `pg_terminate_backend`) não vira
   exceção não capturada; o erro chega pela consulta seguinte ou pelo COMMIT.
+- **`fn` pode rodar mais de uma vez.** Em deadlock (40P01) ou falha de serialização (40001), o
+  PostgreSQL abortou a transação para resolver um conflito com outra, e a documentação dele
+  manda repetir a transação inteira. `withTenant` repete numa conexão nova, até 3 tentativas
+  com espera aleatória curta (até 25 ms e depois 50 ms); se persistir, lança
+  `TransactionConflictError`. Dentro de `fn`, só trabalho na transação: e-mail, HTTP ou fila
+  fora do banco vão depois do commit (a fila do pg-boss, na mesma transação, pode).
 - Erros do banco saem traduzidos:
 
   | SQLSTATE | Erro | Quando |
@@ -49,6 +55,7 @@ const rows = await withTenant(
   | 23514 (trigger) | `InvalidStatusTransitionError` | transição de status proibida |
   | 23505 (`idempotency_key`) | `IdempotencyKeyConflictError` | comando de criação repetido |
   | 23505 (`<tabela>_pkey`) | `IdentifierConflictError` | id já usado, possivelmente por OUTRO tenant; responda genérico (404/409), nunca "já existe" |
+  | 40P01, 40001 | `TransactionConflictError` | conflito com outra transação que persistiu depois das 3 tentativas; responda 503 com `Retry-After` curto |
   | (nenhum) | `TransactionClosedError` | `tx` usado depois do fim do callback (bug do chamador) |
 
   Os demais erros passam inalterados. Nenhuma mensagem de erro traduzido inclui o `DETAIL` do
@@ -131,6 +138,18 @@ EXCLUDE recusa. SQL manual ou job usa `date_trunc('milliseconds', ...)`.
    A serialização entre ocupação nova e mudança de status (FOR SHARE) depende de READ
    COMMITTED, que `withTenant` fixa. Jobs ou SQL manual fora de `withTenant` também rodam em
    READ COMMITTED.
+
+   **Fila por profissional** (migração `0004`): o EXCLUDE grava no índice antes de procurar
+   conflito, então duas reservas simultâneas que se sobrepõem podiam esperar uma pela outra e
+   terminar em deadlock (40P01) em vez de 23P01. O trigger `occupancies_lock_staff_schedule`
+   pega `pg_advisory_xact_lock` pelo hash do `staff_id` antes de gravar ocupação ativa
+   (INSERT ou reativação): a 2ª reserva do mesmo profissional espera a 1ª terminar e recebe
+   23P01 na hora. Outro profissional e outro tenant não esperam. A fila vale para a agenda
+   inteira do profissional e dura até o fim da transação: grave as ocupações por último e
+   mantenha a transação curta. Reserva com profissionais diferentes pega um lock por
+   profissional, na ordem dos INSERTs: duas reservas em ordem inversa podem dar deadlock mesmo
+   sem sobreposição de horário (`withTenant` repete a vítima). Grave as ocupações em ordem de
+   `staff_id`.
 4. **Invariantes no deploy.** `app_private.assert_security_invariants()` roda ao fim de **toda**
    execução do runner, que antes confere o hash do corpo dela (`INVARIANTS_FUNCTION_SHA256` em
    `src/migrate.ts`) e falha se ela sumir, for renomeada ou esvaziada. Nada é commitado se, em
@@ -176,6 +195,7 @@ migração aplicada cujo arquivo mudou.
 | `0001_private_functions` | `app_migrator` | schema `app_private`, validações usadas em CHECK, tipo `time_range` |
 | `0002_schema` | `app_migrator` | gerada pelo drizzle-kit a partir de `src/schema` |
 | `0003_tenant_security` | `app_migrator` | triggers, EXCLUDE, RLS, GRANTs e função de invariantes |
+| `0004_staff_schedule_lock` | `app_migrator` | fila por profissional ao gravar ocupação ativa (sem deadlock no EXCLUDE) |
 
 ```bash
 pnpm --filter @salon/db generate --name=<descricao>   # mudou src/schema
@@ -239,6 +259,9 @@ Cobertura de integração:
   horário de verão distinguida pelo offset;
 - EXCLUDE: sobreposição, intervalos encostados, cancelado/no-show liberando, reativação
   colidindo e corrida controlada e real (exatamente uma vence);
+- fila por profissional: a 2ª reserva (e a reativação) espera a 1ª no advisory lock, mesmo em
+  outro horário; outro profissional e outro tenant não esperam; deadlock clássico entre duas
+  transações é repetido pelo `withTenant` e as duas concluem;
 - os 81 pares da máquina de estados;
 - paridade com o core no banco migrado: todo fuso aceito pelo banco é aceito pelo core; uma
   amostra fixa (os 16 fusos do Brasil, `Etc/UTC` e os fusos dos testes do core) passa nos dois

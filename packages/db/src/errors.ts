@@ -98,6 +98,23 @@ export class TenantIsolationError extends DatabaseConstraintError {
   }
 }
 
+/**
+ * 40P01 (deadlock_detected) ou 40001 (serialization_failure): o PostgreSQL abortou a
+ * transação para resolver um conflito com outra simultânea. É transitório: `withTenant` já
+ * repete a transação inteira algumas vezes antes de devolver este erro.
+ * HTTP sugerido: 503 com `Retry-After` curto, sem detalhe.
+ */
+export class TransactionConflictError extends DatabaseConstraintError {
+  constructor(sqlState: string, cause: unknown) {
+    super('Conflito com outra operação simultânea; tente novamente.', {
+      code: 'TRANSACTION_CONFLICT',
+      sqlState,
+      constraint: undefined,
+      cause,
+    });
+  }
+}
+
 /** 23514 vindo do trigger da máquina de estados (transição ou status inicial inválido). */
 export class InvalidStatusTransitionError extends DatabaseConstraintError {
   constructor(constraint: string | undefined, cause: unknown) {
@@ -180,6 +197,9 @@ export function mapDatabaseError(error: unknown): unknown {
       return new SlotUnavailableError(pgError.constraint, error);
     case PG_ERROR.insufficientPrivilege:
       return new TenantIsolationError(pgError.constraint, error);
+    case PG_ERROR.deadlockDetected:
+    case PG_ERROR.serializationFailure:
+      return new TransactionConflictError(pgError.code, error);
     case PG_ERROR.checkViolation:
       return pgError.constraint !== undefined &&
         STATUS_TRANSITION_CONSTRAINTS.has(pgError.constraint)

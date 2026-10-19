@@ -9,6 +9,7 @@ import {
   mapDatabaseError,
   SlotUnavailableError,
   TenantIsolationError,
+  TransactionConflictError,
 } from './errors';
 
 /** Imita o DatabaseError do node-postgres (só os campos lidos pelo mapeamento). */
@@ -78,6 +79,9 @@ describe('mapDatabaseError', () => {
     // A PK `id` é global: colidir com o id de outro tenant não pode virar "já existe".
     ['23505', 'customers_pkey', IdentifierConflictError, 'IDENTIFIER_CONFLICT'],
     ['23505', 'appointment_events_pkey', IdentifierConflictError, 'IDENTIFIER_CONFLICT'],
+    // Transitórios: o PostgreSQL abortou a transação para resolver um conflito com outra.
+    ['40P01', undefined, TransactionConflictError, 'TRANSACTION_CONFLICT'],
+    ['40001', undefined, TransactionConflictError, 'TRANSACTION_CONFLICT'],
   ] as const)('%s (%s) vira %s', (code, constraint, ErrorClass, stableCode) => {
     const original = wrapped(pgError(code, constraint));
     const mapped = mapDatabaseError(original);

@@ -419,3 +419,66 @@ describe('withTenant: nível de isolamento fixo', () => {
     expect(rows.every((row) => !row.active)).toBe(true);
   });
 });
+
+describe('withTenant: deadlock repete a transação', () => {
+  let db: Database;
+  let tenant: TenantFixture;
+
+  beforeAll(async () => {
+    db = connectAsAppUser();
+    tenant = await createTenantFixture(db);
+  });
+
+  afterAll(async () => {
+    await db.$client.end();
+  });
+
+  it('duas transações que travam linhas em ordem inversa: a vítima é repetida e as duas concluem', async () => {
+    const [ana, bruno] = tenant.staffIds;
+    const at = (iso: string) => new Date(iso);
+    const left = await withTenant(db, tenant.tenantId, (tx) =>
+      bookAppointment(tx, tenant, {
+        staffId: ana,
+        startsAt: at('2027-05-10T13:00:00Z'),
+        endsAt: at('2027-05-10T14:00:00Z'),
+      }),
+    );
+    const right = await withTenant(db, tenant.tenantId, (tx) =>
+      bookAppointment(tx, tenant, {
+        staffId: bruno,
+        startsAt: at('2027-05-10T13:00:00Z'),
+        endsAt: at('2027-05-10T14:00:00Z'),
+      }),
+    );
+    // Cada transação trava a sua primeira linha, espera a outra travar a dela e então pede a
+    // linha da outra: deadlock clássico, que o PostgreSQL resolve abortando uma (40P01).
+    let callbacks = 0;
+    let holdingFirstRow = 0;
+    const bothHoldFirstRow = Promise.withResolvers<undefined>();
+    const lockInOrder = (firstId: string, secondId: string) =>
+      withTenant(db, tenant.tenantId, async (tx) => {
+        callbacks += 1;
+        await tx.execute(
+          sql`SELECT 1 FROM app.appointments WHERE id = ${firstId} FOR NO KEY UPDATE`,
+        );
+        holdingFirstRow += 1;
+        if (holdingFirstRow === 2) {
+          bothHoldFirstRow.resolve(undefined);
+        }
+        // Na repetição a barreira já abriu: a vítima só espera a outra transação terminar.
+        await bothHoldFirstRow.promise;
+        await tx.execute(
+          sql`SELECT 1 FROM app.appointments WHERE id = ${secondId} FOR NO KEY UPDATE`,
+        );
+        return firstId;
+      });
+
+    await expect(
+      Promise.all([
+        lockInOrder(left.appointmentId, right.appointmentId),
+        lockInOrder(right.appointmentId, left.appointmentId),
+      ]),
+    ).resolves.toEqual([left.appointmentId, right.appointmentId]);
+    expect(callbacks).toBe(3);
+  });
+});
