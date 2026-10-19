@@ -685,7 +685,7 @@ for (const [slug, s] of Object.entries(SOURCES)) {
   for (const extra of s.extraLicenses ?? []) write(extra.to, readBlob(slug, s.sha, extra.from));
 }
 
-const INVISIBLE = /[​-‏‪-‮⁠-⁤⁦-⁩﻿­]|[\u{e0000}-\u{e007f}]/u;
+const INVISIBLE = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\u00AD]|[\u{e0000}-\u{e007f}]/u;
 for (const item of MANIFEST) {
   const s = SOURCES[item.src];
   let text = readBlob(item.src, s.sha, item.from);
