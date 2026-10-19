@@ -44,6 +44,16 @@ Limites conhecidos:
   pode ser resolvido (`cd "$DIR"`, `xargs` sobre lista desconhecida), o guarda pede
   confirmação. Para isolamento real, use o sandbox nativo do Claude Code (`/sandbox`) e mantenha
   `.env` real fora do container da nuvem (use os segredos do ambiente).
+- Lacunas abertas, apontadas pela revisão automática do plugin `security-guidance` em
+  2026-10-19 e ainda não corrigidas (cada correção edita `.claude/hooks/`, o que exige
+  aprovação humana):
+  - a expansão de chaves de glob em `paths.mjs` (`protectedGlobLevel`) e em `files-policy.mjs`
+    (`expandGlobBraces`) não modela `{a..b}` e trunca em 64 itens, o que falha aberto em vez
+    de fechado;
+  - `git checkout -t origin/main` ou `--track` seguido de `push` na mesma linha não é
+    reconhecido como push para branch protegida (`trackGitHead`);
+  - `xargs` com `-a` agrupado a outras opções (por exemplo `-ra .env`) não tem o arquivo de
+    argumentos analisado.
 - As regras `Read(...)` valem para as ferramentas de arquivo, não para subprocessos do Bash
   nem para o script do Monitor: ali quem protege é o `guard-bash`. Numa sessão real de
   2026-10-18, `Monitor` com `cat .env.<sonda>` foi negado pelo `guard-bash`
