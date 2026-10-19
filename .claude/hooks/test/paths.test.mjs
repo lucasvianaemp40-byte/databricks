@@ -3,10 +3,13 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   classifySecretPath,
+  dotGlobReachesSecret,
+  expandGlobBraces,
   isLockfile,
   isMigrationPath,
   pathCandidates,
   protectedConfigLevel,
+  protectedGlobLevel,
 } from '../lib/paths.mjs';
 
 describe('classifySecretPath', () => {
@@ -156,5 +159,138 @@ describe('isLockfile / protectedConfigLevel / isMigrationPath', () => {
     assert.equal(isMigrationPath('packages/db/drizzle/meta/_journal.json'), false);
     assert.equal(isMigrationPath('packages/db/migrations/2026/x.ts'), true);
     assert.equal(isMigrationPath('packages/db/src/schema.ts'), false);
+  });
+});
+
+describe('expandGlobBraces', () => {
+  it('expande listas, aninhamento e alternativa vazia', () => {
+    assert.deepEqual(expandGlobBraces('{a,b}.ts'), {
+      expansions: ['a.ts', 'b.ts'],
+      unresolved: [],
+    });
+    assert.deepEqual(expandGlobBraces('.env{,.local}').expansions, ['.env', '.env.local']);
+    assert.deepEqual(expandGlobBraces('{x,{1..2}}').expansions.sort(), ['1', '1..2', '2', 'x']);
+  });
+
+  it('expande sequência numérica e de letra e mantém o literal (o globset do Grep não expande)', () => {
+    assert.deepEqual(expandGlobBraces('f{1..3}').expansions.sort(), ['f1', 'f1..3', 'f2', 'f3']);
+    assert.ok(expandGlobBraces('.e{n..n}v').expansions.includes('.env'));
+    assert.ok(expandGlobBraces('{a..p}em').expansions.includes('a..pem'));
+  });
+
+  it('chave depois de uma sem fechamento ainda é expandida', () => {
+    assert.ok(
+      expandGlobBraces('x{/.claude/{settings.json,y}').expansions.includes(
+        'x{/.claude/settings.json',
+      ),
+    );
+  });
+
+  it('acima do teto não trunca em silêncio: devolve o prefixo do que não expandiu', () => {
+    const big = expandGlobBraces(`.claude/${'{a,b}'.repeat(7)}`);
+    assert.ok(big.unresolved.length > 0);
+    assert.ok(big.unresolved.every((prefix) => prefix.startsWith('.claude/')));
+    assert.ok(big.expansions.length <= 64, `gerou ${big.expansions.length}`);
+    assert.deepEqual(expandGlobBraces('x/{1..1000}').unresolved, ['x/']);
+  });
+});
+
+describe('protectedGlobLevel: sequência, teto e tamanho (fail-closed)', () => {
+  const cases = /** @type {Array<[string, 'deny' | 'ask' | null]>} */ ([
+    ['.c{l..l}aude/settings.json', 'deny'],
+    ['.claude/se{s..u}tings.json', 'deny'],
+    ['.claude/{settings,x}.json', 'deny'],
+    // Acima do teto: nega se o prefixo está sob .claude/; nos outros casos, pede confirmação.
+    ['.claude/{1..100}', 'deny'],
+    ['{.claude,x}/{1..1000}', 'deny'],
+    ['.c*/{1..1000}', 'deny'],
+    [`.claude/${'{a,b}'.repeat(7)}`, 'deny'],
+    ['x/{1..1000}', 'ask'],
+    ['.claude{1..1000}', 'ask'],
+    [`src/${'{a,b}'.repeat(7)}`, 'ask'],
+    // Glob que casa o próprio diretório protegido.
+    ['.claude/h*', 'deny'],
+    ['.claude/m*', 'ask'],
+    ['.git/h*', 'ask'],
+    ['.hus*', 'ask'],
+    // Glob grande demais para avaliar: mesma regra do prefixo.
+    [`.claude/${'[a-z]'.repeat(300)}`, 'deny'],
+    [`src/${'[a-z]'.repeat(300)}`, 'ask'],
+    // Globs normais continuam iguais.
+    ['src/{a,b}.ts', null],
+    ['src/{1..3}.ts', null],
+    ['docs/{a..c}/*.md', null],
+    ['apps/web/src/app/[slug]/page.tsx', null],
+    ['.claude/skills/*/SKILL.md', null],
+  ]);
+  for (const [glob, expected] of cases) {
+    it(`${String(expected).padEnd(4)} ${glob.length > 60 ? `${glob.slice(0, 60)}…` : glob}`, () => {
+      assert.equal(protectedGlobLevel(glob), expected);
+    });
+  }
+});
+
+// Acima de MAX_GLOB_PATH_LENGTH a decisão olhava só o prefixo literal antes do primeiro curinga:
+// `.c*/hooks/...` não tinha segmento completo nesse prefixo e caía em `ask`. Agora cada segmento
+// é avaliado contra `.claude` até o primeiro que não dá para avaliar (chaves, classe inválida).
+describe('protectedGlobLevel: caminho longo com curinga no segmento de .claude', () => {
+  const long = 'a'.repeat(2000);
+  const braces = `{${'a,'.repeat(600)}b}`;
+  const cases = /** @type {Array<[string, 'deny' | 'ask' | null]>} */ ([
+    [`.c*/hooks/${long}`, 'deny'],
+    [`.cl?ude/hooks/${long}`, 'deny'],
+    [`.c[l]aude/settings.json/${long}`, 'deny'],
+    [`x/.c*/hooks/${long}`, 'deny'],
+    [`.CLAUDE/${long}*`, 'deny'],
+    // Segmento longo demais para virar expressão regular conta como "pode casar".
+    [`.c[${'a-z'.repeat(100)}]aude/hooks/${long}`, 'deny'],
+    // Não dá para decidir (chaves) e o primeiro segmento tem curinga: nega.
+    [`*/settings.json/${braces}`, 'deny'],
+    [`.c{l,x}aude/hooks/${long}`, 'deny'],
+    // Primeiro segmento literal fora de .claude: pede confirmação, como antes.
+    [`src/${braces}`, 'ask'],
+    [`src/${long}*`, 'ask'],
+    [`src/.c*/x/${long}`, 'deny'],
+    [`*/${long}`, 'ask'],
+    [`src/a*/${'b'.repeat(2000)}/[x].md`, 'ask'],
+  ]);
+  for (const [glob, expected] of cases) {
+    it(`${String(expected).padEnd(4)} ${glob.slice(0, 40)}… (${glob.length})`, () => {
+      assert.equal(protectedGlobLevel(glob), expected);
+    });
+  }
+});
+
+describe('globs: tamanho e ReDoS', () => {
+  it('glob com milhares de * depois de .env continua sendo segredo (o limite não falha aberto)', () => {
+    assert.notEqual(classifySecretPath(`.env${'*'.repeat(5000)}`), null);
+  });
+
+  it('glob longo demais para avaliar é tratado como segredo se pode casar um', () => {
+    assert.notEqual(classifySecretPath(`.e[${'n'.repeat(300)}]x`), null);
+  });
+
+  it('código inline longo com [ ] não vira segredo (não casa nome curto nenhum)', () => {
+    const code = `import json; print([k for k in d]); ${'x = [1, 2, 3]; '.repeat(30)}`;
+    assert.equal(classifySecretPath(code), null);
+  });
+
+  it('colapsar * e ? mantém o resultado dos globs normais', () => {
+    assert.notEqual(classifySecretPath('.env**'), null);
+    assert.notEqual(classifySecretPath('*.p*?m'), null);
+    assert.notEqual(classifySecretPath('.e?*?'), null);
+    assert.equal(classifySecretPath('**.json'), null);
+    assert.equal(dotGlobReachesSecret('.??*'), true);
+    assert.equal(protectedGlobLevel('.claude/se**ings.json'), 'deny');
+  });
+
+  it('muitos * seguidos não travam a classificação', () => {
+    const started = performance.now();
+    assert.equal(classifySecretPath(`${'*'.repeat(13)}x`), null);
+    assert.equal(classifySecretPath(`${'*?'.repeat(13)}x`), null);
+    assert.equal(dotGlobReachesSecret(`.${'*'.repeat(13)}x`), false);
+    assert.equal(protectedGlobLevel(`.claude/${'*'.repeat(13)}x`), null);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 1000, `levou ${elapsed.toFixed(0)} ms`);
   });
 });

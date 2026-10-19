@@ -54,7 +54,7 @@ Iteração 3.
 | E3.4 | Como **recepção**, quero marcar chegada, atendimento, conclusão, cancelamento e não comparecimento | P0 | só as transições da máquina de estados; ator registrado em `appointment_events`; cancelar libera o horário na hora |
 | E3.5 | Como **recepção**, quero encaixar um cliente na pausa de uma coloração | P1 | o motor oferece a pausa; o `EXCLUDE` garante |
 | E3.6 | Como **dono**, quero ver o histórico de alterações de um agendamento | P1 | lista de `appointment_events` com ator e horário local |
-| E3.7 | Como **dono**, quero autorizar um encaixe sobreposto excepcional | P2 | decidir o desenho (bypass explícito e auditado do `EXCLUDE`) antes de implementar |
+| E3.7 | Como **dono**, quero autorizar um encaixe sobreposto excepcional | P2 | política decidida (A14 do [modelo de ameaças](../seguranca/modelo-de-ameacas.md#6-casos-de-abuso-do-agendamento)): só `owner` ou `admin` com permissão explícita dada pelo dono; nunca `member`, cliente, worker ou canal `online` (recusado também no banco); motivo obrigatório de lista fechada, sem texto livre, gravado em `appointment_events` com o ator; casos negativos na matriz de autorização. O desenho técnico do bypass do `EXCLUDE` passa por `threat-model` e `review-migration` antes de implementar |
 
 ## E4. Página pública de agendamento
 

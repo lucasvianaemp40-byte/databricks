@@ -1,6 +1,11 @@
 # ADR-0005: Fila de jobs com pg-boss no próprio PostgreSQL
 
-- **Status:** Proposto. O worker ainda não existe; o papel `app_worker` já existe no banco.
+- **Status:** Aceito (decisão delegada pelo dono em 2026-10-19; revisável). O worker ainda não
+  existe; o papel `app_worker` já existe no banco. **Ajuste feito no aceite:** entrou na
+  decisão o item "Enfileirar pela aplicação". Enfileirar na transação do `withTenant` faz o
+  `app_user` escrever no schema `pgboss`, que não tem `tenant_id` nem RLS, e a proposta só
+  tratava os privilégios do `app_worker`. Sem esse limite, um GRANT amplo para enfileirar
+  deixaria a aplicação ler ou alterar a fila de todos os salões.
 - **Data:** 2026-10-17
 - **Relacionados:** [arquitetura, seção 7](../arquitetura.md#7-jobs-e-assincronia-planejado),
   [ADR-0006](0006-hospedagem-e-residencia.md)
@@ -32,12 +37,19 @@ Fatos verificados no registry npm e no repositório `timgit/pg-boss` em 16/10/20
 - Inngest e Trigger.dev Cloud: nenhuma região no Brasil foi encontrada (não verificado). Os
   dois disparam o evento depois do commit, o que exigiria um outbox.
 
-## Decisão (proposta)
+## Decisão
 
 Usar **pg-boss** no mesmo PostgreSQL (schema `pgboss`), com um **worker long-running** em
 processo separado (`apps/worker`, Node 24, no Fly.io `gru`).
 
 - **Enfileirar na mesma transação** de `withTenant`.
+- **Enfileirar pela aplicação** (incluído no aceite): quem enfileira é o `app_user`, dentro do
+  `withTenant`. Ele recebe no schema `pgboss` só o necessário para criar job (INSERT e o
+  SELECT de coluna que o `send` exigir, por exemplo para o `RETURNING`), nunca UPDATE, DELETE
+  ou leitura do payload de outros jobs. As tabelas do pg-boss não têm `tenant_id` nem RLS: o
+  limite entre salões na fila é esse GRANT mínimo, mais o payload só com IDs. Os GRANTs exatos
+  saem da migração do worker, com o ajuste correspondente em `assert_security_invariants()`
+  (não verificados na 12.38).
 - **Payload mínimo:** IDs e `tenantId`, sem nome, telefone ou texto livre. O worker lê o resto
   com `withTenant({ tenantId, actor: system })`. Job sem tenant é rejeitado.
 - **Idempotência:**
@@ -74,6 +86,7 @@ processo separado (`apps/worker`, Node 24, no Fly.io `gru`).
 - **Ações decorrentes:**
   - migração com o schema `pgboss` e os GRANTs, revisada pela skill `review-migration`;
   - testes de integração de enfileiramento transacional (rollback desfaz o job);
+  - teste negativo de que o `app_user` cria job mas não lê nem altera job de outro salão;
   - alerta de backlog e de DLQ.
 
 ## Alternativas consideradas

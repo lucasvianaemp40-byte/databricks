@@ -38,12 +38,13 @@ import {
 } from './git.mjs';
 import {
   classifySecretPath,
+  collapseWildcards,
   dotGlobReachesSecret,
   isLockfile,
   isMigrationPath,
   pathCandidates,
   protectedConfigLevel,
-  protectedGlobLevel,
+  protectedGlobMatch,
   userClaudeConfigLevel,
 } from './paths.mjs';
 import { findSubstitutions, parseShell } from './shell.mjs';
@@ -68,6 +69,9 @@ import { findSubstitutions, parseShell } from './shell.mjs';
  * @property {Vars} [vars] variáveis atribuídas no script até este comando
  * @property {string} [headBranch] branch que `git checkout|switch` deixou em HEAD nesta linha
  *   (string com o nome, ou `'unknown'` quando não dá para resolver); sobrepõe `currentBranch`
+ * @property {string | null} [headUpstream] branch remoto que `git checkout -b x origin/main`,
+ *   `--track` ou `git branch -u` definiu nesta linha como upstream de HEAD (`null` = nenhum,
+ *   `'unknown'` = não dá para saber); ausente = vale a configuração persistida
  */
 
 /**
@@ -723,9 +727,27 @@ function trackState(cmd, ctx) {
       return chdir(ctx, target, i >= 0 ? (argsDyn[i] ?? false) : false);
     }
     case 'git': {
-      // `git checkout|switch <branch>` muda o HEAD antes de um `git push` na mesma linha.
-      const head = trackGitHead(args);
-      return head === null ? ctx : { ...ctx, headBranch: head };
+      // `git checkout|switch` troca o HEAD e `git branch -u` muda o upstream dele antes de um
+      // `git push` na mesma linha.
+      const change = trackGitHead(args);
+      if (change === null) return ctx;
+      if (change.branch !== undefined) {
+        return {
+          ...ctx,
+          headBranch: change.branch,
+          headUpstream: change.renamed ? ctx.headUpstream : change.upstream,
+        };
+      }
+      // Só o upstream mudou: vale quando o branch alvo é o HEAD; alvo dinâmico pode ser o HEAD,
+      // e aí o upstream fica desconhecido (fail-closed).
+      if (change.upstreamOf === 'unknown') return { ...ctx, headUpstream: 'unknown' };
+      const head = ctx.headBranch ?? ctx.currentBranch(ctx.cwd);
+      const other =
+        change.upstreamOf !== undefined &&
+        head !== null &&
+        head !== 'unknown' &&
+        change.upstreamOf !== head;
+      return other ? ctx : { ...ctx, headUpstream: change.upstream };
     }
     default:
       return ctx;
@@ -733,28 +755,238 @@ function trackState(cmd, ctx) {
 }
 
 /**
- * Branch que `git checkout|switch` (ou `symbolic-ref`/`branch -m`) deixa em HEAD. Devolve o
- * nome, `'unknown'` quando não dá para resolver (`-`, `--detach`, dinâmico) ou `null` quando o
- * comando não muda o branch (ex.: `git checkout -- arquivo`).
- * @param {string[]} words argumentos depois de `git`
+ * O que um `git ...` muda no HEAD, para um `git push` na mesma linha.
+ * - `branch`: branch que fica em HEAD (`'unknown'` quando não dá para resolver: `-`,
+ *   `--detach`, nome dinâmico); ausente quando o comando não troca de branch.
+ * - `upstream`: branch remoto que o comando define como upstream (`main` em
+ *   `git checkout -b x origin/main`), `null` quando não define nenhum, `'unknown'` quando não dá
+ *   para saber (`--track=inherit`, `origin/HEAD`, ponto de partida dinâmico ou sem a forma
+ *   `<remoto>/<branch>`); ausente quando o comando não
+ *   mexe no upstream (troca para branch existente: vale a configuração persistida).
+ * - `upstreamOf`: branch cujo upstream `git branch -u <up> <branch>` mudou (ausente = HEAD,
+ *   inclusive com alvo `HEAD` ou `@`; `'unknown'` quando o alvo é dinâmico).
+ * - `renamed`: `git branch -m` renomeia e o upstream segue a branch.
+ * @typedef {object} GitHeadChange
+ * @property {string} [branch]
+ * @property {string | null} [upstream]
+ * @property {string} [upstreamOf]
+ * @property {boolean} [renamed]
+ */
+
+/** Opções globais do git com valor no argumento seguinte (`git -C dir checkout ...`). */
+const GIT_GLOBAL_VALUE_OPTIONS = new Set([
+  '-C',
+  '-c',
+  '--git-dir',
+  '--work-tree',
+  '--namespace',
+  '--super-prefix',
+  '--config-env',
+  '--attr-source',
+  '--list-cmds',
+]);
+
+/**
+ * Branch remoto de uma ref de rastreamento: `origin/main`, `remotes/origin/main` e
+ * `refs/remotes/origin/main` dão `main`. `null` quando a ref é claramente local (`HEAD`, `@`,
+ * `HEAD~2`, hash, `refs/heads/x`, `refs/tags/x`). `'unknown'` quando não tem a forma
+ * `<remoto>/<branch>` clara: `origin/HEAD` aponta para a branch padrão do remoto, e um nome sem
+ * barra pode ser um remoto (`origin` resolve para `origin/HEAD`) ou uma branch local (fail-closed).
+ * @param {string} ref
  * @returns {string | null}
  */
+function remoteBranchOf(ref) {
+  if (/^(?:HEAD|@)(?:[~^]\d*)*$/.test(ref) || /^[0-9a-f]{7,64}$/i.test(ref)) return null;
+  if (/^refs\/(?:heads|tags)\//.test(ref)) return null;
+  const r = ref.replace(/^refs\/remotes\//, '').replace(/^remotes\//, '');
+  if (r.startsWith('refs/')) return null;
+  const slash = r.indexOf('/');
+  if (slash <= 0 || slash === r.length - 1) return 'unknown';
+  const branch = r.slice(slash + 1);
+  return branch === 'HEAD' ? 'unknown' : branch;
+}
+
+/**
+ * Ref ou nome que não dá para resolver sem executar (`-`, `@{-1}`, variável, curinga).
+ * @param {string} ref
+ */
+function isUnresolvedRef(ref) {
+  return ref === '-' || /^@\{-?\d*\}?$/.test(ref) || /[$`*?[]/.test(ref);
+}
+
+/**
+ * Lê `git checkout|switch` como o parse-options do git (2.43): letras agrupadas (`-qb x`,
+ * `-bx`, `-qcmain`), valor anexado opcional do `-t` (`-tdirect`), prefixo único de opção longa
+ * (`--tr`, `--cre=x`); entre `--track` e `--no-track`, vale o último. No `checkout`, `--`
+ * separa caminhos (`git checkout main -- arquivo` não troca de branch); no `switch`, só encerra
+ * as opções (`git switch -- main` troca para main).
+ *
+ * Upstream da branch criada (`-b`/`-c`/`--orphan`): com `--track` ou sem opção de rastreamento
+ * (branch.autoSetupMerge=true, o padrão), ponto de partida remoto vira o upstream; `--no-track`
+ * não define nenhum; `--track=inherit` copia o do ponto de partida (desconhecido). Sem
+ * `-b`/`-c`, `--track origin/main` cria a branch local `main` (conferido no git 2.43).
+ * @param {'checkout' | 'switch'} sub
+ * @param {string[]} rest argumentos depois do subcomando
+ * @returns {GitHeadChange | null}
+ */
+function trackCheckoutSwitch(sub, rest) {
+  const createShort = sub === 'switch' ? 'cC' : 'bB';
+  const createLong = sub === 'switch' ? ['--create', '--force-create', '--orphan'] : ['--orphan'];
+  /** @type {string | undefined} */
+  let created;
+  let detach = false;
+  /** @type {'direct' | 'inherit' | false | undefined} `undefined` = padrão do git */
+  let track;
+  /** @type {string[]} */
+  const positionals = [];
+  let endOfOptions = false;
+  for (let k = 0; k < rest.length; k++) {
+    const a = rest[k] ?? '';
+    if (endOfOptions || !a.startsWith('-') || a === '-') {
+      positionals.push(a);
+      continue;
+    }
+    if (a === '--') {
+      if (sub === 'checkout') {
+        // O resto são caminhos: sem -b/--track, só restaura arquivos.
+        if (created === undefined && !track) return null;
+        break;
+      }
+      endOfOptions = true;
+      continue;
+    }
+    if (a.startsWith('--')) {
+      const resolved = resolveGitLongOption(sub, a);
+      if (resolved === null || 'ambiguous' in resolved) continue; // o git recusa e não roda
+      if (createLong.includes(resolved.name)) {
+        if (resolved.value !== null) created = resolved.value;
+        else {
+          k++;
+          created = rest[k] ?? 'unknown';
+        }
+      } else if (resolved.name === '--track') {
+        track = resolved.value === 'inherit' ? 'inherit' : 'direct';
+      } else if (resolved.name === '--no-track') {
+        track = false;
+      } else if (resolved.name === '--detach') {
+        detach = true;
+      } else if (resolved.value === null && gitOptionTakesValue(sub, resolved.name)) {
+        k++;
+      }
+      continue;
+    }
+    for (let c = 1; c < a.length; c++) {
+      const ch = a.charAt(c);
+      const attached = a.slice(c + 1);
+      if (createShort.includes(ch)) {
+        if (attached !== '') created = attached;
+        else {
+          k++;
+          created = rest[k] ?? 'unknown';
+        }
+        break;
+      }
+      if (ch === 't') {
+        // `-t` aceita valor só anexado (`-tdirect`, `-tinherit`); o resto do grupo é dele.
+        track = attached === 'inherit' ? 'inherit' : 'direct';
+        break;
+      }
+      if (ch === 'd') detach = true;
+    }
+  }
+  if (detach) return { branch: 'unknown' };
+  const start = positionals[0];
+  if (created !== undefined) {
+    /** @type {string | null} */
+    let upstream = null;
+    if (track === 'inherit') upstream = 'unknown';
+    else if (track !== false && start !== undefined) {
+      upstream = isUnresolvedRef(start) ? 'unknown' : remoteBranchOf(start);
+    }
+    return { branch: isUnresolvedRef(created) ? 'unknown' : created, upstream };
+  }
+  if (track) {
+    // Sem nome, a branch local leva o nome do branch remoto (`-t origin/main` cria `main`).
+    const derived = start === undefined || isUnresolvedRef(start) ? null : remoteBranchOf(start);
+    if (derived === null) return { branch: 'unknown', upstream: 'unknown' };
+    return { branch: derived, upstream: track === 'inherit' ? 'unknown' : derived };
+  }
+  if (start === undefined) return null;
+  return { branch: isUnresolvedRef(start) ? 'unknown' : start };
+}
+
+/**
+ * `git branch -m/-M` (renomeia) e `git branch -u/--set-upstream-to/--unset-upstream` (upstream
+ * de HEAD ou do branch indicado), com letras agrupadas e valor anexado (`-uorigin/main`).
+ * @param {string[]} rest argumentos depois de `branch`
+ * @returns {GitHeadChange | null}
+ */
+function trackBranch(rest) {
+  if (rest.includes('-m') || rest.includes('-M')) {
+    const names = rest.filter((a) => !a.startsWith('-'));
+    return { branch: names.at(-1) ?? 'unknown', renamed: true };
+  }
+  /** @type {string | null | undefined} */
+  let upstream;
+  /** @type {string[]} */
+  const names = [];
+  /** @param {string} value */
+  const upstreamOf = (value) => (isUnresolvedRef(value) ? 'unknown' : remoteBranchOf(value));
+  for (let k = 0; k < rest.length; k++) {
+    const a = rest[k] ?? '';
+    if (a === '--') {
+      names.push(...rest.slice(k + 1));
+      break;
+    }
+    if (a.startsWith('--')) {
+      const resolved = resolveGitLongOption('branch', a);
+      if (resolved === null || 'ambiguous' in resolved) continue;
+      if (resolved.name === '--set-upstream-to') {
+        let value = resolved.value;
+        if (value === null) {
+          k++;
+          value = rest[k] ?? '';
+        }
+        upstream = upstreamOf(value);
+      } else if (resolved.name === '--unset-upstream') {
+        upstream = null;
+      } else if (resolved.value === null && gitOptionTakesValue('branch', resolved.name)) {
+        k++;
+      }
+      continue;
+    }
+    if (a.startsWith('-') && a !== '-') {
+      const at = a.indexOf('u');
+      if (at > 0) {
+        let value = a.slice(at + 1);
+        if (value === '') {
+          k++;
+          value = rest[k] ?? '';
+        }
+        upstream = upstreamOf(value);
+      }
+      continue;
+    }
+    names.push(a);
+  }
+  if (upstream === undefined) return null;
+  const target = names[0];
+  // `HEAD` e `@` são a branch atual, como sem alvo.
+  if (target === undefined || target === 'HEAD' || target === '@') return { upstream };
+  return { upstream, upstreamOf: isUnresolvedRef(target) ? 'unknown' : target };
+}
+
+/**
+ * O que `git ...` muda no HEAD antes de um `git push` na mesma linha (ver GitHeadChange), ou
+ * `null` quando não muda nada (ex.: `git checkout -- arquivo`).
+ * @param {string[]} words argumentos depois de `git`
+ * @returns {GitHeadChange | null}
+ */
 function trackGitHead(words) {
-  const valueGlobals = new Set([
-    '-C',
-    '-c',
-    '--git-dir',
-    '--work-tree',
-    '--namespace',
-    '--super-prefix',
-    '--config-env',
-    '--attr-source',
-    '--list-cmds',
-  ]);
   let i = 0;
   while (i < words.length) {
     const a = words[i] ?? '';
-    if (valueGlobals.has(a)) {
+    if (GIT_GLOBAL_VALUE_OPTIONS.has(a)) {
       i += 2;
       continue;
     }
@@ -766,34 +998,13 @@ function trackGitHead(words) {
   }
   const sub = words[i];
   const rest = words.slice(i + 1);
-  if (sub === 'checkout' || sub === 'switch') {
-    const createOpts =
-      sub === 'switch'
-        ? new Set(['-c', '-C', '--create', '--force-create'])
-        : new Set(['-b', '-B', '--orphan']);
-    for (let k = 0; k < rest.length; k++) {
-      const a = rest[k] ?? '';
-      if (a === '--') return null; // só caminhos: não muda o branch
-      if (createOpts.has(a)) return rest[k + 1] ?? 'unknown';
-      const eq = /^(?:--create|--force-create|--orphan)=(.+)$/.exec(a);
-      if (eq) return eq[1] ?? 'unknown';
-      if (a === '--detach') return 'unknown';
-      if (a.startsWith('-')) continue;
-      if (a === '-' || /^@\{-?\d*\}?$/.test(a) || /[$`*?[]/.test(a)) return 'unknown';
-      return a;
-    }
-    return null;
-  }
+  if (sub === 'checkout' || sub === 'switch') return trackCheckoutSwitch(sub, rest);
   if (sub === 'symbolic-ref' && rest[0] === 'HEAD' && rest[1] !== undefined) {
-    return /[$`]/.test(rest[1]) ? 'unknown' : normalizeBranchRef(rest[1]);
+    return { branch: /[$`]/.test(rest[1]) ? 'unknown' : normalizeBranchRef(rest[1]) };
   }
-  if (sub === 'branch' && (rest.includes('-m') || rest.includes('-M'))) {
-    const names = rest.filter((a) => !a.startsWith('-'));
-    return names.at(-1) ?? 'unknown';
-  }
+  if (sub === 'branch') return trackBranch(rest);
   return null;
 }
-
 /**
  * Nomes de variáveis que `read`/`mapfile` vão preencher.
  * @param {string} bin
@@ -977,6 +1188,13 @@ function analyzeArgv(argvIn, dynamicIn, cmd, all, ctx, depth, v) {
     const first = argv[0] ?? '';
     if (dynamic[0] || /[$`]/.test(first)) {
       v.ask(`Nome de comando dinâmico (${first}); confirme o que será executado.`);
+      return;
+    }
+    // Segredo como programa (`./.env`, `env ./.env`, `xargs .env`): o shell interpreta o
+    // arquivo, e as mensagens de erro e as atribuições expõem o conteúdo.
+    const secret = classifySecretPath(first);
+    if (secret) {
+      v.deny(`Executar ${secret.reason} como comando expõe o conteúdo; bloqueado.`);
       return;
     }
     // `python3.13`, `pypy3`, `php8.3`, `nodejs` seguem as regras do interpretador.
@@ -1555,6 +1773,87 @@ function unwrapFlock(args, dynamic, ctx, depth, v) {
 }
 
 /**
+ * Opções longas do xargs (findutils 4.9): `required` leva valor (`--arg-file=X` ou no
+ * argumento seguinte); `optional` só com `=`; `none` não leva.
+ * @type {Record<string, 'required' | 'optional' | 'none'>}
+ */
+const XARGS_LONG_OPTIONS = {
+  null: 'none',
+  'arg-file': 'required',
+  delimiter: 'required',
+  eof: 'optional',
+  replace: 'optional',
+  'max-lines': 'optional',
+  'max-args': 'required',
+  'open-tty': 'none',
+  interactive: 'none',
+  'no-run-if-empty': 'none',
+  'max-chars': 'required',
+  verbose: 'none',
+  'show-limits': 'none',
+  exit: 'none',
+  'max-procs': 'required',
+  'process-slot-var': 'required',
+  version: 'none',
+  help: 'none',
+};
+
+/**
+ * Lê as opções do xargs como o getopt_long dele (findutils 4.9,
+ * "+0a:E:e::i::I:l::L:n:oprs:txP:d:"): letras agrupadas (`-ra`, `-0ra`), valor anexado ou no
+ * argumento seguinte para a, d, E, I, L, n, P, s; valor só anexado para e, i, l (`-ia` é `-i`
+ * com "a", e o comando vem depois); opção longa por prefixo único (`--arg` = `--arg-file`).
+ * Opção desconhecida ou ambígua faz o xargs sair sem executar nada.
+ * @param {string[]} args argumentos depois de `xargs`
+ * @returns {{ index: number, argFiles: string[] }} índice do comando e arquivos de `-a`
+ */
+function parseXargsOptions(args) {
+  const required = 'adEILnPs';
+  const optional = 'eil';
+  /** @type {string[]} */
+  const argFiles = [];
+  let i = 0;
+  while (i < args.length) {
+    const a = args[i] ?? '';
+    if (a === '--') return { index: i + 1, argFiles };
+    if (!a.startsWith('-') || a === '-') break;
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      const typed = eq >= 0 ? a.slice(2, eq) : a.slice(2);
+      const prefixed = Object.keys(XARGS_LONG_OPTIONS).filter((n) => n.startsWith(typed));
+      const name = Object.hasOwn(XARGS_LONG_OPTIONS, typed)
+        ? typed
+        : prefixed.length === 1
+          ? prefixed[0]
+          : undefined;
+      let value = eq >= 0 ? a.slice(eq + 1) : null;
+      if (name !== undefined && XARGS_LONG_OPTIONS[name] === 'required' && value === null) {
+        i++;
+        value = args[i] ?? '';
+      }
+      if (name === 'arg-file' && value !== null) argFiles.push(value);
+      i++;
+      continue;
+    }
+    for (let j = 1; j < a.length; j++) {
+      const ch = a.charAt(j);
+      if (optional.includes(ch)) break; // o resto do grupo é o valor
+      if (required.includes(ch)) {
+        let value = a.slice(j + 1);
+        if (value === '') {
+          i++;
+          value = args[i] ?? '';
+        }
+        if (ch === 'a') argFiles.push(value);
+        break;
+      }
+    }
+    i++;
+  }
+  return { index: i, argFiles };
+}
+
+/**
  * `xargs [opções] comando`: os argumentos acrescentados vêm do stdin (pipe, `<`, `<<<`) ou
  * de `-a ARQUIVO`. Se a origem cita um segredo (`find -name '.env*' | xargs cat`), nega;
  * se é desconhecida e o comando despeja conteúdo (`... | xargs cat`), pede confirmação.
@@ -1567,31 +1866,7 @@ function unwrapFlock(args, dynamic, ctx, depth, v) {
  * @returns {{ argv: string[], dynamic: boolean[] } | 'stop'}
  */
 function unwrapXargs(args, dynamic, cmd, all, ctx, v) {
-  const valueOpts = new Set(['-a', '-d', '-E', '-I', '-L', '-n', '-P', '-s']);
-  const longValueOpts = new Set([
-    '--arg-file',
-    '--delimiter',
-    '--max-args',
-    '--max-procs',
-    '--max-chars',
-    '--process-slot-var',
-  ]);
-  /** @type {string[]} */
-  const argFiles = [];
-  let i = 0;
-  while (i < args.length) {
-    const a = args[i] ?? '';
-    if (a === '--') {
-      i++;
-      break;
-    }
-    if (!a.startsWith('-')) break;
-    if (a === '-a' || a === '--arg-file') argFiles.push(args[i + 1] ?? '');
-    else if (a.startsWith('--arg-file=')) argFiles.push(a.slice('--arg-file='.length));
-    else if (/^-a./.test(a)) argFiles.push(a.slice(2));
-    if (valueOpts.has(a) || longValueOpts.has(a)) i += 2;
-    else i++;
-  }
+  const { index: i, argFiles } = parseXargsOptions(args);
   for (const file of argFiles) {
     for (const candidate of pathCandidates(file)) {
       const secret = classifySecretPath(candidate);
@@ -2211,11 +2486,17 @@ function checkWriteAbs(abs, ctx, v, how) {
   if (insideProject) {
     // Um glob (`.cl?ude/settings.json`, `.claude/se*`, `.claude/{settings,hooks}`) expande no
     // shell para a configuração protegida, mas chega aqui literal: testa o glob também.
-    const raw = protectedConfigLevel(rel) ?? protectedGlobLevel(rel);
+    const exact = protectedConfigLevel(rel);
+    const glob = exact === null ? protectedGlobMatch(rel) : null;
+    const raw = exact ?? glob?.level ?? null;
     const level = raw === 'deny' && METADATA_BINS.has(how) ? 'ask' : raw;
     if (level === 'deny') {
       v.deny(
         `Alterar ${rel} por Bash desligaria as proteções do agente. Use a ferramenta Edit: o guard-files pede confirmação humana para esse caminho.`,
+      );
+    } else if (level === 'ask' && glob?.unresolved) {
+      v.ask(
+        `Escrita em glob longo demais (ou com chaves demais) para análise (${rel.slice(0, 80)}) via ${how}; confirme o destino.`,
       );
     } else if (level === 'ask') {
       v.ask(`Alteração de configuração de hooks/MCP (${rel}) via ${how}; confirme.`);
@@ -4970,15 +5251,30 @@ function isProtectedBranch(name) {
   return /^(?:main|master)$/i.test(name);
 }
 
+/** Maior padrão de refspec com curinga avaliado; acima disso conta como "pode casar". */
+const MAX_REFSPEC_GLOB_LENGTH = 1024;
+
 /**
  * Um padrão de destino de refspec com `*` pode casar main/master (`refs/heads/*`, `ma*`, `m*`)?
+ * `*` é qualquer sequência e `?` um caractere qualquer (o git recusa `?` em ref, então o push
+ * falha de qualquer jeito). Sequências de `*`/`?` são colapsadas antes de virar expressão
+ * regular: `.*.*.*` (ou `.*?.*?`) repetido levava segundos de backtracking. Padrão longo
+ * demais não é avaliado e conta como "pode casar" (fail-closed).
  * @param {string} pat
  * @returns {boolean}
  */
 function globRefMatchesProtected(pat) {
+  if (pat.length > MAX_REFSPEC_GLOB_LENGTH) return true;
   /** @param {string} p */
-  const toRe = (p) =>
-    new RegExp(`^${p.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
+  const toRe = (p) => {
+    let src = '';
+    for (const ch of collapseWildcards(p)) {
+      if (ch === '*') src += '.*';
+      else if (ch === '?') src += '.';
+      else src += ch.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+    return new RegExp(`^${src}$`);
+  };
   const re = toRe(pat);
   if (['refs/heads/main', 'refs/heads/master', 'main', 'master'].some((c) => re.test(c))) {
     return true;
@@ -5519,6 +5815,7 @@ function checkGit(args, dynamic, cmd, all, ctx, depth, v) {
       break;
     case 'stash':
       if (rest[0] === 'drop' || rest[0] === 'clear') v.ask('Remover stash; confirme.');
+      else checkGitStashPaths(rest, gitCtx, v);
       break;
     case 'branch':
       if (
@@ -5680,6 +5977,51 @@ function checkGitPathWrites(sub, rest, ctx, v) {
     paths = sub === 'restore' ? positionals : positionals.slice(1);
   }
   for (const p of paths) checkWriteTarget(p, ctx, v, `git ${sub}`);
+}
+
+/**
+ * `git stash [push] [opções] [--] <caminho>...` volta esses caminhos ao HEAD na árvore de
+ * trabalho: é escrita neles, como `git checkout -- <caminho>` (nega em .claude/hooks e
+ * settings). `-m`/`--message` (e prefixo, `--mess`) leva valor; caminhos vindos de
+ * `--pathspec-from-file` não são visíveis e pedem confirmação. Sem caminho, o stash volta a
+ * árvore inteira ao HEAD, como trocar de branch, e não é tratado aqui.
+ * @param {string[]} rest argumentos depois de `stash`
+ * @param {PolicyContext} ctx
+ * @param {Verdict} v
+ */
+function checkGitStashPaths(rest, ctx, v) {
+  let k = 0;
+  if (rest[0] === 'push') k = 1;
+  else if (rest[0] !== undefined && !rest[0].startsWith('-')) return; // pop, apply, save, list...
+  /** @type {string[]} */
+  const paths = [];
+  for (; k < rest.length; k++) {
+    const a = rest[k] ?? '';
+    if (a === '--') {
+      paths.push(...rest.slice(k + 1));
+      break;
+    }
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      const name = eq >= 0 ? a.slice(0, eq) : a;
+      if (name.length >= '--pathspec-fr'.length && '--pathspec-from-file'.startsWith(name)) {
+        v.ask(
+          'git stash com caminhos lidos de arquivo (--pathspec-from-file); confirme que não inclui .claude/hooks nem settings.',
+        );
+        if (eq < 0) k++;
+      } else if (name.length >= '--m'.length && '--message'.startsWith(name) && eq < 0) {
+        k++;
+      }
+      continue;
+    }
+    if (a.startsWith('-') && a !== '-') {
+      // `-m` com valor anexado (`-mwip`) ou no argumento seguinte (`-qm wip`).
+      if (a.indexOf('m') === a.length - 1) k++;
+      continue;
+    }
+    paths.push(a);
+  }
+  for (const p of paths) checkWriteTarget(p, ctx, v, 'git stash');
 }
 
 /**
@@ -5878,6 +6220,18 @@ function checkGitPush(rest, restDynamic, ctx, v, configs, depth) {
         if (b && isProtectedBranch(b)) {
           v.deny(`Push da branch ${b} (protegida) é proibido; trabalhe numa branch e abra um PR.`);
         }
+      }
+      // Upstream definido na mesma linha (`git checkout -b x origin/main`, `--track`,
+      // `git branch -u`): com push.default=upstream, `git push` sem refspec envia para ele.
+      const upstream = ctx.headUpstream;
+      if (upstream === 'unknown') {
+        v.ask(
+          'git push sem refspec depois de definir o upstream na mesma linha (--track=inherit, origin/HEAD, nome de remoto sozinho ou valor dinâmico); confirme o destino.',
+        );
+      } else if (typeof upstream === 'string' && isProtectedBranch(upstream)) {
+        v.deny(
+          `git push sem refspec com upstream ${upstream} definido na mesma linha: com push.default=upstream envia para a branch protegida; proibido. Use git push -u origin HEAD.`,
+        );
       }
       const persisted = ctx.gitConfigList ? ctx.gitConfigList(ctx.cwd) : [];
       checkPushConfig(

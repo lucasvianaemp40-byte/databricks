@@ -6,9 +6,20 @@
  * `permissions.deny` do `.claude/settings.json` (test/settings-deny.test.mjs confere).
  */
 import path from 'node:path';
+import { braceSequenceTerms } from './shell.mjs';
 
 /** Único arquivo .env* que o agente pode ler e editar (modelo sem valores reais). */
 const ENV_EXAMPLE = '.env.example';
+
+/** Teto de alternativas na expansão de chaves (`{a,b}`, `{1..9}`); acima dele, fail-closed. */
+const MAX_BRACE_EXPANSIONS = 64;
+/**
+ * Maior glob de um nome (segmento) avaliado por expressão regular, já com `*` e `?` colapsados.
+ * Acima disso o glob não é avaliado e quem chama trata como "pode casar" (fail-closed).
+ */
+const MAX_GLOB_SEGMENT_LENGTH = 256;
+/** Maior caminho com glob que `protectedGlobLevel` avalia; acima disso, fail-closed. */
+const MAX_GLOB_PATH_LENGTH = 1024;
 
 /**
  * Nomes de arquivo (basename, sem diferenciar maiúsculas) que guardam segredos.
@@ -123,6 +134,38 @@ export function pathCandidates(token) {
 }
 
 /**
+ * Junta cada sequência de `*` e `?` (`**`, `*?*`) num equivalente com um `*` só (`*`, `?*`).
+ * Casa os mesmos nomes e evita o backtracking polinomial de `.*.*.*` na expressão regular.
+ * Dentro de `[...]` o conjunto de caracteres da classe também não muda.
+ * @param {string} glob
+ */
+export function collapseWildcards(glob) {
+  return glob.replace(/[*?]{2,}/g, (run) => {
+    const singles = run.replaceAll('*', '');
+    return run.includes('*') ? `${singles}*` : singles;
+  });
+}
+
+/**
+ * Menor tamanho de nome que o glob casa: `*` vale 0; `?`, classe e literal valem 1. É exato:
+ * nome mais curto que isso não casa, sem precisar avaliar a expressão regular.
+ * @param {string} glob
+ */
+function globMinLength(glob) {
+  let n = 0;
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob.charAt(i);
+    if (ch === '*') continue;
+    if (ch === '[') {
+      const end = glob.indexOf(']', i + 1);
+      if (end !== -1) i = end;
+    }
+    n++;
+  }
+  return n;
+}
+
+/**
  * Converte um glob de basename em RegExp (apenas `*`, `?` e `[...]`).
  * @param {string} glob
  */
@@ -157,22 +200,45 @@ function globMatchesLeadingDot(glob) {
 }
 
 /**
- * @param {RegExp} re
+ * @typedef {object} GlobMatcher
+ * @property {RegExp | null} re `null` quando o glob passa de MAX_GLOB_SEGMENT_LENGTH: não é
+ *   avaliado, e `globMayMatch` responde "pode casar" (fail-closed)
+ * @property {number} minLength menor tamanho de nome que o glob casa
+ */
+
+/**
+ * O nome pode casar o glob? Exato quando há expressão regular; sem ela (glob longo demais),
+ * responde `true` sempre que o tamanho do nome permite.
+ * @param {GlobMatcher} matcher
+ * @param {string} name
+ */
+function globMayMatch(matcher, name) {
+  if (name.length < matcher.minLength) return false;
+  return matcher.re === null || matcher.re.test(name);
+}
+
+/**
+ * @param {GlobMatcher} matcher
  * @param {string} glob
  * @param {string[]} samples
  */
-function globHits(re, glob, samples) {
+function globHits(matcher, glob, samples) {
   const dot = globMatchesLeadingDot(glob);
-  return samples.some((sample) => (dot || !sample.startsWith('.')) && re.test(sample));
+  return samples.some(
+    (sample) => (dot || !sample.startsWith('.')) && globMayMatch(matcher, sample),
+  );
 }
 
 /**
  * @param {string} glob
- * @returns {RegExp | null}
+ * @returns {GlobMatcher | null} `null` quando a classe é inválida (`[z-a]`)
  */
 function compileGlob(glob) {
+  const collapsed = collapseWildcards(glob);
+  const minLength = globMinLength(collapsed);
+  if (collapsed.length > MAX_GLOB_SEGMENT_LENGTH) return { re: null, minLength };
   try {
-    return globToRegExp(glob);
+    return { re: globToRegExp(collapsed), minLength };
   } catch {
     return null;
   }
@@ -188,9 +254,12 @@ function isSecretBasename(base) {
   if (/^ca[-_.]?(?:bundle|certificates?)(?:[-_.][\w-]+)?\.(?:crt|pem)$/i.test(base)) return false;
   if (/[*?[]/.test(base)) {
     if (base === '*' || base === '.*' || base === '**') return false;
-    const re = compileGlob(base);
-    if (!re) return false;
-    return globHits(re, base, SECRET_SAMPLES) && !globHits(re, base, BENIGN_SAMPLES);
+    const matcher = compileGlob(base);
+    if (!matcher) return false;
+    // Glob longo demais para avaliar: segredo se o tamanho permite casar um (fail-closed); o
+    // filtro dos nomes comuns não se aplica, porque ele também não dá para avaliar.
+    if (matcher.re === null) return globHits(matcher, base, SECRET_SAMPLES);
+    return globHits(matcher, base, SECRET_SAMPLES) && !globHits(matcher, base, BENIGN_SAMPLES);
   }
   return SECRET_BASENAMES.some((re) => re.test(base));
 }
@@ -205,8 +274,8 @@ function isSecretBasename(base) {
 export function dotGlobReachesSecret(candidate) {
   const base = path.posix.basename(String(candidate).replace(/\\/g, '/'));
   if (!/[*?[]/.test(base) || !globMatchesLeadingDot(base)) return false;
-  const re = compileGlob(base);
-  return re !== null && globHits(re, base, SECRET_SAMPLES);
+  const matcher = compileGlob(base);
+  return matcher !== null && globHits(matcher, base, SECRET_SAMPLES);
 }
 
 /**
@@ -224,7 +293,10 @@ export function dotGlobReachesSecret(candidate) {
  */
 export function classifySecretPath(candidate) {
   const p = String(candidate).replace(/\\/g, '/');
-  if (p === '' || p.includes('\n') || p.length > 4096) return null;
+  if (p === '' || p.includes('\n')) return null;
+  // Caminho literal acima de PATH_MAX não abre; um glob tão longo ainda expande para nome curto
+  // (`.env` seguido de milhares de `*`), então continua avaliado.
+  if (p.length > 4096 && !/[*?[]/.test(p)) return null;
   if (isProcEnvironPath(p)) {
     return { kind: 'proc', reason: 'ambiente de outro processo (/proc/*/environ)' };
   }
@@ -302,60 +374,131 @@ const PROTECTED_SAMPLES = /** @type {Array<[string, 'deny' | 'ask']>} */ ([
   ['package-lock.json', 'deny'],
   ['yarn.lock', 'deny'],
   ['bun.lock', 'deny'],
+  // Os diretórios protegidos também: `mv .claude/h* /tmp/` leva a pasta inteira.
+  ['.claude/hooks', 'deny'],
+  ['.claude/mcp', 'ask'],
+  ['.git/hooks', 'ask'],
+  ['.husky', 'ask'],
 ]);
 
 /**
- * Expande chaves simples (`{a,b}`, inclusive vazias) num glob; limite para evitar explosão.
- * @param {string} glob
- * @returns {string[]}
+ * Primeiro grupo de chaves de um glob, com as alternativas. Lista com vírgula (inclusive
+ * aninhada e com alternativa vazia); grupo sem vírgula vira a própria alternativa (`{x}` -> `x`,
+ * como no globset do Grep); sequência do bash (`{1..3}`) traz os termos e também o texto
+ * literal (`1..3`), que é o que o globset casa. `parts: null` quando a sequência passa de `max`.
+ * Chave sem fechamento é literal, e a busca segue para a próxima.
+ * @param {string} item
+ * @param {number} max
+ * @returns {{ open: number, close: number, parts: string[] | null } | null}
  */
-function expandBraces(glob) {
-  /** @type {string[]} */
-  const done = [];
-  const queue = [glob];
-  while (queue.length > 0 && done.length + queue.length <= 64) {
-    const item = /** @type {string} */ (queue.shift());
-    const open = item.indexOf('{');
-    if (open < 0) {
-      done.push(item);
-      continue;
-    }
+function findGlobBraceGroup(item, max) {
+  for (let open = item.indexOf('{'); open >= 0; open = item.indexOf('{', open + 1)) {
     let depth = 0;
-    let close = -1;
     /** @type {number[]} */
     const commas = [];
     for (let i = open + 1; i < item.length; i++) {
       const ch = item.charAt(i);
       if (ch === '{') depth++;
+      else if (ch === ',' && depth === 0) commas.push(i);
+      else if (ch === '}' && depth > 0) depth--;
       else if (ch === '}') {
-        if (depth === 0) {
-          close = i;
-          break;
+        const content = item.slice(open + 1, i);
+        if (commas.length === 0) {
+          const terms = braceSequenceTerms(content, max);
+          if (terms === null) return { open, close: i, parts: null };
+          return { open, close: i, parts: [content, ...(terms ?? [])] };
         }
-        depth--;
-      } else if (ch === ',' && depth === 0) commas.push(i);
-    }
-    if (close < 0) {
-      done.push(item);
-      continue;
-    }
-    let from = open + 1;
-    for (const end of [...commas, close]) {
-      queue.push(item.slice(0, open) + item.slice(from, end) + item.slice(close + 1));
-      from = end + 1;
+        /** @type {string[]} */
+        const parts = [];
+        let from = open + 1;
+        for (const end of [...commas, i]) {
+          parts.push(item.slice(from, end));
+          from = end + 1;
+        }
+        return { open, close: i, parts };
+      }
     }
   }
-  return [...done, ...queue].slice(0, 64);
+  return null;
+}
+
+/**
+ * Expande as chaves de um glob (`{a,b}`, `.env{,.local}`, `{1..3}`, `{a..c}`) sem truncar: o
+ * que não dá para expandir inteiro (sequência ou produto acima de `max` alternativas) vai para
+ * `unresolved` como o prefixo antes da chave, para quem chama decidir (fail-closed). A ordem
+ * das expansões não é a do bash; o conjunto é um superconjunto do que o bash e o globset geram.
+ * @param {string} glob
+ * @param {number} [max]
+ * @returns {{ expansions: string[], unresolved: string[] }}
+ */
+export function expandGlobBraces(glob, max = MAX_BRACE_EXPANSIONS) {
+  /** @type {string[]} */
+  const expansions = [];
+  /** @type {Set<string>} */
+  const unresolved = new Set();
+  const queue = [glob];
+  while (queue.length > 0) {
+    const item = /** @type {string} */ (queue.shift());
+    const group = findGlobBraceGroup(item, max);
+    if (!group) {
+      expansions.push(item);
+      continue;
+    }
+    const prefix = item.slice(0, group.open);
+    if (group.parts === null || expansions.length + queue.length + group.parts.length > max) {
+      unresolved.add(prefix);
+      continue;
+    }
+    const suffix = item.slice(group.close + 1);
+    for (const part of group.parts) queue.push(prefix + part + suffix);
+  }
+  return { expansions, unresolved: [...unresolved] };
 }
 
 /**
  * Um segmento de glob casa um nome (sem cruzar `/`), respeitando a regra do ponto inicial.
+ * Glob longo demais para avaliar casa todo nome de tamanho compatível (fail-closed).
  * @param {string} glob
  * @param {string} name
  */
 function globSegmentMatches(glob, name) {
   if (name.startsWith('.') && !globMatchesLeadingDot(glob)) return false;
-  return compileGlob(glob)?.test(name) === true;
+  const matcher = compileGlob(glob);
+  return matcher !== null && globMayMatch(matcher, name);
+}
+
+/**
+ * Nível de um glob cujas chaves passam do teto, a partir do prefixo já conhecido: `deny` se ele está sob `.claude/` (algum segmento
+ * completo casa `.claude`), `ask` nos outros casos.
+ * @param {string} prefix
+ * @returns {'deny' | 'ask'}
+ */
+function unresolvedGlobLevel(prefix) {
+  const complete = prefix
+    .split('/')
+    .slice(0, -1)
+    .filter((s) => s !== '' && s !== '.');
+  return complete.some((seg) => globSegmentMatches(seg, '.claude')) ? 'deny' : 'ask';
+}
+
+/**
+ * Nível de um caminho com glob longo demais para avaliar inteiro: cada segmento, literal ou com
+ * curinga, é comparado com `.claude` até o primeiro que não dá para avaliar (chaves, classe
+ * inválida). Segmento longo demais para virar expressão regular conta como "pode casar" quando o
+ * tamanho permite. `deny` se algum pode casar; sem decisão, `deny` quando o primeiro segmento
+ * não vazio tem curinga (ele mesmo pode ser a pasta .claude) e `ask` nos outros casos.
+ * @param {string} p
+ * @returns {'deny' | 'ask'}
+ */
+function longGlobLevel(p) {
+  const segments = p.split('/').filter((s) => s !== '' && s !== '.');
+  for (const seg of segments) {
+    if (seg.includes('{') || compileGlob(seg) === null) {
+      return /[*?[{]/.test(segments[0] ?? '') ? 'deny' : 'ask';
+    }
+    if (globSegmentMatches(seg, '.claude')) return 'deny';
+  }
+  return 'ask';
 }
 
 /**
@@ -386,19 +529,41 @@ function pathGlobMatches(globSegs, nameSegs) {
  * @returns {'deny' | 'ask' | null}
  */
 export function protectedGlobLevel(rel) {
+  return protectedGlobMatch(rel)?.level ?? null;
+}
+
+/**
+ * Como `protectedGlobLevel`, e diz de onde veio o nível: `unresolved: false` quando o glob
+ * alcança uma amostra protegida; `unresolved: true` quando o glob (ou parte dele) não deu
+ * para avaliar inteiro (chaves acima do teto, caminho longo demais) e o nível saiu só do
+ * prefixo conhecido (fail-closed). Quem chama usa isso para dar o motivo certo.
+ * @param {string} rel caminho relativo à raiz, com `/`
+ * @returns {{ level: 'deny' | 'ask', unresolved: boolean } | null}
+ */
+export function protectedGlobMatch(rel) {
   const p = String(rel).replace(/\\/g, '/').replace(/^\.\//, '');
   if (!/[*?[{]/.test(p)) return null;
-  let best = /** @type {'deny' | 'ask' | null} */ (null);
-  for (const expanded of expandBraces(p)) {
+  if (p.length > MAX_GLOB_PATH_LENGTH) {
+    return { level: longGlobLevel(p), unresolved: true };
+  }
+  const { expansions, unresolved } = expandGlobBraces(p);
+  let sampleAsk = false;
+  for (const expanded of expansions) {
     const globSegs = expanded.split('/').filter((s) => s !== '');
     for (const [sample, level] of PROTECTED_SAMPLES) {
       if (pathGlobMatches(globSegs, sample.split('/'))) {
-        if (level === 'deny') return 'deny';
-        best = 'ask';
+        if (level === 'deny') return { level: 'deny', unresolved: false };
+        sampleAsk = true;
       }
     }
   }
-  return best;
+  let unresolvedAsk = false;
+  for (const prefix of unresolved) {
+    if (unresolvedGlobLevel(prefix) === 'deny') return { level: 'deny', unresolved: true };
+    unresolvedAsk = true;
+  }
+  if (sampleAsk) return { level: 'ask', unresolved: false };
+  return unresolvedAsk ? { level: 'ask', unresolved: true } : null;
 }
 
 /**
@@ -449,7 +614,8 @@ export function isMigrationPath(rel) {
 function segmentMatchesEnviron(seg) {
   if (seg === 'environ') return true;
   if (!/[*?[]/.test(seg)) return false;
-  return compileGlob(seg)?.test('environ') === true;
+  const matcher = compileGlob(seg);
+  return matcher !== null && globMayMatch(matcher, 'environ');
 }
 
 /**

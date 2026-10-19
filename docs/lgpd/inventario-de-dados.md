@@ -145,7 +145,7 @@ procedimento privilegiado dedicado, ainda pendente (ver [retenção](retencao.md
 
 | Onde | Dados | Regra |
 |---|---|---|
-| Logs da aplicação (pino, Vercel) | IDs opacos, `requestId`; IP só em registro de acesso | redaction de telefone, e-mail, OTP, tokens e cookies (regra Semgrep `pii-in-logs`); nunca o erro cru do banco (`DrizzleQueryError` e `cause` trazem os parâmetros da consulta); IP por 6 meses ([ADR-0010](../adr/0010-observabilidade.md), proposto) |
+| Logs da aplicação (pino, Vercel) | IDs opacos, `requestId`; IP só em registro de acesso | redaction de telefone, e-mail, OTP, tokens e cookies (regra Semgrep `pii-in-logs`); nunca o erro cru do banco (`DrizzleQueryError` e `cause` trazem os parâmetros da consulta); IP por 6 meses ([ADR-0010](../adr/0010-observabilidade.md), aceito; implementação no T2) |
 | Sentry | erros | `sendDefaultPii: false`, `beforeSend` com redaction, túnel na mesma origem, região UE se possível ([ADR-0010](../adr/0010-observabilidade.md)) |
 | Upstash Redis | chaves de rate limit | usar `HMAC(segredo, telefone)` em vez do telefone, com TTL curto |
 | pg-boss | payload de job | só IDs + `tenantId` |

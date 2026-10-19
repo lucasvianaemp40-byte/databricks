@@ -37,7 +37,10 @@ environments) e num teste ponta a ponta na sessão de pesquisa, com o Claude Cod
   workspace. `deny`, `ask` e hooks valem sempre. *Ressalva verificada em 2026-10-18: na
   nuvem, edição de arquivo roda sem perguntar em qualquer modo de permissão (documentação do
   ambiente na nuvem), e um Edit em `.claude/settings.json` foi aplicado sem bloqueio numa
-  sessão em modo padrão. Ali as regras `ask` de `Edit(...)` não pedem confirmação.*
+  sessão em modo padrão. Ali as regras `ask` de `Edit(...)` não pedem confirmação. Verificado
+  em 2026-10-19: o `ask` devolvido por hook também não interrompe. O `guard-files` devolveu
+  `ask` para Edit em `.claude/hooks/**` e `.claude/settings*.json`, e a edição foi aplicada
+  sem interrupção.*
 - Hook com `onFailure: "block"` falha fechado (bloqueia se o hook quebrar ou estourar o
   tempo).
 - Uma skill de projeto com o mesmo nome de um comando embutido o substitui. Uma skill chamada
@@ -99,8 +102,9 @@ environments) e num teste ponta a ponta na sessão de pesquisa, com o Claude Cod
 ## Consequências
 
 - **Positivas:**
-  - os mesmos hooks no CLI, na IDE e na nuvem com um repositório (as regras `ask` de edição
-    de arquivo, não: na nuvem elas não pedem confirmação);
+  - os mesmos hooks no CLI, na IDE e na nuvem com um repositório (as confirmações de edição
+    de arquivo, não: na nuvem nem as regras `ask` nativas nem o `ask` dos hooks interrompem a
+    edição);
   - revisões especializadas (multi-tenant, LGPD, migrações, AppSec) sob demanda;
   - `pnpm verify` roda antes de cada commit;
   - material de terceiros auditável.
@@ -118,14 +122,17 @@ environments) e num teste ponta a ponta na sessão de pesquisa, com o Claude Cod
     `.mcp.json` e `.claude/mcp/`. Como as regras nativas (`permissions.ask`) não pedem
     confirmação na nuvem (conferido em 2026-10-18), o `guard-files` passou a pedir confirmação
     (ask, não deny, para o kit continuar mantível) na edição de `.claude/settings*.json` e
-    `.claude/hooks/` pelas ferramentas Edit/Write. Se o ask de hook também for aprovado
-    automaticamente na nuvem (não verificado), resta a leitura do diff por quem faz o merge. A pasta está no CODEOWNERS, que só
-    passa a bloquear o merge com a segunda pessoa no projeto (ver decisão 5).
+    `.claude/hooks/` pelas ferramentas Edit/Write. Esse `ask` vale no CLI local, mas na nuvem
+    não interrompe a edição (verificado em 2026-10-19). Na nuvem, o controle real sobre essa
+    via é a revisão do PR por quem faz o merge; a escrita por Bash continua negada, e o job
+    `hooks` do CI (dentro do `ci-ok`) falha se o `settings.json` deixar de registrar o
+    `guard-bash` para Bash e Monitor (`kit-wiring.test.mjs`). A pasta está no CODEOWNERS, que
+    só passa a bloquear o merge com a segunda pessoa no projeto (ver decisão 5).
 - **Ações decorrentes:**
   - `pnpm test:hooks` e `tsc -p .claude/hooks` no CI (job `hooks`);
   - `ask` no `guard-files` para a edição de `.claude/settings*.json` e `.claude/hooks/` pelas
-    ferramentas de arquivo [fundação]; conferir numa sessão na nuvem se um `ask` de hook pede
-    confirmação ou é aprovado automaticamente [planejado];
+    ferramentas de arquivo [fundação]; conferido numa sessão na nuvem em 2026-10-19 que esse
+    `ask` não interrompe a edição ali, onde vale a revisão do PR;
   - revisão mensal dos SHAs vendorizados e das versões de action e MCP;
   - sessões na nuvem com vários repositórios: configurar o setup script do ambiente.
 

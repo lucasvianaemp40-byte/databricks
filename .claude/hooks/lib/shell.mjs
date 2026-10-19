@@ -334,48 +334,143 @@ export function findSubstitutions(text) {
 }
 
 /**
- * Expansão de chaves no estilo do bash para listas com vírgula (`{a,b}c` -> `ac bc`).
- * Só considera chaves e vírgulas que vieram de trechos sem aspas (máscara `false`).
- * Sequências (`{1..3}`) são mantidas literais.
+ * Termos de uma sequência do bash, sem as chaves (`1..3`, `a..e..2`, `01..10`). Segue o bash
+ * 5.2: o passo vale em módulo (0 vale 1); a largura é fixa quando um extremo tem zero à
+ * esquerda (`01`, `-01`, não `0`, `-0` nem `+01`); letras andam pela tabela ASCII (`Z..b`
+ * inclui `[`, `\` e `]`).
+ * @param {string} content texto entre as chaves
+ * @param {number} limit máximo de termos
+ * @returns {string[] | null | undefined} os termos; `null` quando passam de `limit`;
+ *   `undefined` quando não é sequência (o bash deixa a chave literal)
+ */
+export function braceSequenceTerms(content, limit) {
+  const int = /^([+-]?\d+)\.\.([+-]?\d+)(?:\.\.([+-]?\d+))?$/.exec(content);
+  const chr = int ? null : /^([A-Za-z])\.\.([A-Za-z])(?:\.\.([+-]?\d+))?$/.exec(content);
+  const m = int ?? chr;
+  if (!m) return undefined;
+  const step = Math.abs(Number.parseInt(m[3] ?? '1', 10)) || 1;
+  const lhs = m[1] ?? '';
+  const rhs = m[2] ?? '';
+  const from = chr ? lhs.charCodeAt(0) : Number(lhs);
+  const to = chr ? rhs.charCodeAt(0) : Number(rhs);
+  if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to)) return null;
+  const count = Math.floor(Math.abs(to - from) / step) + 1;
+  if (count > limit) return null;
+  const dir = to >= from ? 1 : -1;
+  /** @param {string} s */
+  const zeroPadded = (s) => /^-?0\d/.test(s);
+  const width = !chr && (zeroPadded(lhs) || zeroPadded(rhs)) ? Math.max(lhs.length, rhs.length) : 0;
+  /** @type {string[]} */
+  const terms = [];
+  for (let k = 0; k < count; k++) {
+    const n = from + dir * step * k;
+    if (chr) {
+      terms.push(String.fromCharCode(n));
+      continue;
+    }
+    const sign = n < 0 ? '-' : '';
+    terms.push(sign + String(Math.abs(n)).padStart(width - sign.length, '0'));
+  }
+  return terms;
+}
+
+/**
+ * Expansão de chaves no estilo do bash: listas com vírgula (`{a,b}c` -> `ac bc`) e
+ * sequências (`{1..3}`, `{a..c}`), na ordem do bash. Só considera chaves e vírgulas que vieram
+ * de trechos sem aspas (máscara `false`). Devolve no máximo MAX_BRACE_EXPANSIONS palavras.
  * @param {string} value
  * @param {boolean[]} literal máscara: `true` para caracteres vindos de aspas ou escapes
  * @returns {string[]}
  */
 export function expandBraces(value, literal) {
-  /** @type {Array<{ value: string, literal: boolean[] }>} */
-  let queue = [{ value, literal }];
-  /** @type {string[]} */
-  const done = [];
-  while (queue.length > 0 && done.length + queue.length <= MAX_BRACE_EXPANSIONS) {
-    /** @type {Array<{ value: string, literal: boolean[] }>} */
-    const next = [];
-    for (const item of queue) {
-      const group = findBraceGroup(item.value, item.literal);
-      if (!group) {
-        done.push(item.value);
-        continue;
-      }
-      const prefix = item.value.slice(0, group.open);
-      const prefixMask = item.literal.slice(0, group.open);
-      const suffix = item.value.slice(group.close + 1);
-      const suffixMask = item.literal.slice(group.close + 1);
-      for (const part of group.parts) {
-        next.push({
-          value: prefix + part.value + suffix,
-          literal: [...prefixMask, ...part.literal, ...suffixMask],
-        });
-      }
-    }
-    queue = next;
-  }
-  for (const item of queue) done.push(item.value);
-  return done.slice(0, MAX_BRACE_EXPANSIONS);
+  return expandBraceWord(value, literal).words;
 }
 
 /**
+ * @typedef {{ value: string, literal: boolean[] }} BraceItem
+ */
+
+/**
+ * Alternativas de um item no grupo de chaves `[open, close]` dele, na ordem do bash.
+ * @param {BraceItem} item
+ * @param {number} open
+ * @param {number} close
+ * @param {BraceItem[]} parts
+ * @returns {BraceItem[]}
+ */
+function braceAlternatives(item, open, close, parts) {
+  const prefix = item.value.slice(0, open);
+  const prefixMask = item.literal.slice(0, open);
+  const suffix = item.value.slice(close + 1);
+  const suffixMask = item.literal.slice(close + 1);
+  return parts.map((part) => ({
+    value: prefix + part.value + suffix,
+    literal: [...prefixMask, ...part.literal, ...suffixMask],
+  }));
+}
+
+/**
+ * Como `expandBraces`, mas diz se a expansão saiu inteira. `complete: false` quando o produto
+ * ou uma sequência passa de MAX_BRACE_EXPANSIONS: o chamador não pode tratar as palavras
+ * devolvidas como todas as que o bash geraria (fail-closed).
+ *
+ * `leftovers`: quando o teto corta a expansão, o que ficou na pilha não some. A expansão é em
+ * profundidade, então 64 palavras de uma alternativa (`{{1..64},.env}`) esgotavam o teto e
+ * a alternativa seguinte (`.env`) nem era vista. Item restante sem chave vira palavra; item
+ * com um grupo só vira as alternativas completas dele (`.e{n,x}v`). Itens com mais de um
+ * grupo continuam fora (é o produto que o teto limita) e só valem pelo erro de análise.
  * @param {string} value
  * @param {boolean[]} literal
- * @returns {{ open: number, close: number, parts: Array<{ value: string, literal: boolean[] }> } | null}
+ * @returns {{ words: string[], complete: boolean, leftovers: string[] }}
+ */
+function expandBraceWord(value, literal) {
+  // Em profundidade, alternativa da esquerda primeiro: é a ordem em que o bash gera as palavras.
+  /** @type {BraceItem[]} */
+  const stack = [{ value, literal }];
+  /** @type {string[]} */
+  const words = [];
+  let complete = true;
+  while (stack.length > 0 && words.length < MAX_BRACE_EXPANSIONS) {
+    const item = /** @type {BraceItem} */ (stack.pop());
+    const group = findBraceGroup(item.value, item.literal);
+    if (!group) {
+      words.push(item.value);
+      continue;
+    }
+    if (group.parts === null) {
+      complete = false;
+      continue;
+    }
+    const alternatives = braceAlternatives(item, group.open, group.close, group.parts);
+    for (let k = alternatives.length - 1; k >= 0; k--) {
+      stack.push(/** @type {BraceItem} */ (alternatives[k]));
+    }
+  }
+  if (stack.length === 0) return { words, complete, leftovers: [] };
+  /** @type {string[]} */
+  const leftovers = [];
+  // Do topo para a base: a ordem em que o bash geraria as palavras.
+  for (let k = stack.length - 1; k >= 0; k--) {
+    const item = /** @type {BraceItem} */ (stack[k]);
+    const group = findBraceGroup(item.value, item.literal);
+    if (!group) {
+      leftovers.push(item.value);
+      continue;
+    }
+    if (group.parts === null) continue;
+    for (const next of braceAlternatives(item, group.open, group.close, group.parts)) {
+      if (!findBraceGroup(next.value, next.literal)) leftovers.push(next.value);
+    }
+  }
+  return { words, complete: false, leftovers };
+}
+
+/**
+ * Primeiro grupo de chaves expansível: lista com vírgula ou sequência válida. `parts: null`
+ * quando a sequência passa do teto (não dá para expandir inteira).
+ * @param {string} value
+ * @param {boolean[]} literal
+ * @returns {{ open: number, close: number, parts: Array<{ value: string, literal: boolean[] }> | null } | null}
  */
 function findBraceGroup(value, literal) {
   for (let open = 0; open < value.length; open++) {
@@ -390,7 +485,20 @@ function findBraceGroup(value, literal) {
       if (ch === '{') depth++;
       else if (ch === '}') {
         if (depth === 0) {
-          if (commas.length === 0) break;
+          if (commas.length === 0) {
+            // Sequência só vale sem aspas em nenhum caractere: `{1'..'3}` fica literal.
+            const quoted = literal.slice(open + 1, j).some(Boolean);
+            const terms = quoted
+              ? undefined
+              : braceSequenceTerms(value.slice(open + 1, j), MAX_BRACE_EXPANSIONS);
+            if (terms === undefined) break;
+            if (terms === null) return { open, close: j, parts: null };
+            return {
+              open,
+              close: j,
+              parts: terms.map((t) => ({ value: t, literal: Array(t.length).fill(false) })),
+            };
+          }
           /** @type {Array<{ value: string, literal: boolean[] }>} */
           const parts = [];
           let from = open + 1;
@@ -802,9 +910,16 @@ export function parseShell(script) {
     }
     current.substitutions.push(...token.subs);
     current.processSubstitutions.push(...token.procSubs);
-    const expanded = expandBraces(token.value, token.literal);
-    for (const value of expanded) {
+    const expanded = expandBraceWord(token.value, token.literal);
+    for (const value of [...expanded.words, ...expanded.leftovers]) {
       current.words.push(value);
+      current.dynamic.push(token.dynamic);
+    }
+    if (!expanded.complete) {
+      // Fail-closed: além do erro (o chamador pede confirmação), a palavra original segue para
+      // a análise, que reavalia o glob (`.claude/{1..100}` sob .claude/ é negado).
+      errors.push(`expansão de chaves grande demais para análise (${token.value.slice(0, 80)})`);
+      current.words.push(token.value);
       current.dynamic.push(token.dynamic);
     }
   }

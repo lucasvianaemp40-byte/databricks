@@ -120,7 +120,8 @@ a documentação dele só cobre pnpm até a v10.
   - reavaliar o lefthook quando sair release com provenance;
   - aplicar as configurações de interface listadas em
     [.github/rulesets/README.md](../../.github/rulesets/README.md), começando pela seção
-    "0. Bootstrap" (nada está aplicado ainda).
+    "0. Bootstrap" (em 2026-10-19, só a branch `main` existia, ainda sem ser a padrão; o resto
+    não estava aplicado).
 
 ## Alternativas consideradas
 

@@ -14,7 +14,8 @@
  *    O `_journal.json` do drizzle-kit não é imutável, mas edição manual pede confirmação.
  * 4. Configuração de hooks git e do MCP (lefthook*, .git/hooks, .git/config, .husky,
  *    .mcp.json, .claude/mcp): escrita pede confirmação. `.claude/settings*.json` e
- *    `.claude/hooks/` já pedem aprovação pelas regras nativas (`permissions.ask`).
+ *    `.claude/hooks/` também pedem confirmação por este hook: na nuvem as ferramentas de
+ *    arquivo rodam sem perguntar, então as regras nativas (`permissions.ask`) não bastam.
  * 5. Cobertura: acrescentar dica de exclusão (`v8 ignore`, `istanbul ignore`...) em src/,
  *    test/ ou e2e/ de um pacote pede confirmação (o test-hygiene do pacote também falha).
  */
@@ -23,6 +24,7 @@ import path from 'node:path';
 import { existsOnDefaultBranch as gitExistsOnDefaultBranch } from './git.mjs';
 import {
   classifySecretPath,
+  expandGlobBraces,
   isLockfile,
   isMigrationPath,
   protectedConfigLevel,
@@ -43,7 +45,6 @@ import {
  */
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
-const MAX_GLOB_PARTS = 64;
 /**
  * Dicas de exclusão de cobertura que o Vitest respeita (istanbul, c8, v8, node:coverage), a
  * mesma expressão dos meta-testes test-hygiene dos pacotes.
@@ -135,46 +136,9 @@ function splitGlobList(text) {
 }
 
 /**
- * Expande `{a,b}` (inclusive aninhado e com alternativa vazia: `.env{,.local}`).
- * @param {string} glob
- * @returns {string[]}
- */
-function expandGlobBraces(glob) {
-  /** @type {string[]} */
-  const done = [];
-  const queue = [glob];
-  while (queue.length > 0 && done.length + queue.length <= MAX_GLOB_PARTS) {
-    const item = /** @type {string} */ (queue.shift());
-    const open = item.indexOf('{');
-    let close = -1;
-    let depth = 0;
-    /** @type {number[]} */
-    const commas = [];
-    for (let i = open + 1; open >= 0 && i < item.length; i++) {
-      const ch = item.charAt(i);
-      if (ch === '{') depth++;
-      else if (ch === '}') {
-        if (depth === 0) {
-          close = i;
-          break;
-        }
-        depth--;
-      } else if (ch === ',' && depth === 0) commas.push(i);
-    }
-    if (open < 0 || close < 0) {
-      done.push(item);
-      continue;
-    }
-    let from = open + 1;
-    for (const end of [...commas, close]) {
-      queue.push(item.slice(0, open) + item.slice(from, end) + item.slice(close + 1));
-      from = end + 1;
-    }
-  }
-  return [...done, ...queue].slice(0, MAX_GLOB_PARTS);
-}
-
-/**
+ * Segredo que o glob do Grep pode alcançar. As chaves (`{a,b}`, `.env{,.local}`, `{1..3}`)
+ * são expandidas por `expandGlobBraces`; o que passa do teto e não dá para expandir inteiro
+ * conta como segredo (fail-closed: na nuvem só o deny segura a busca).
  * @param {string} glob
  * @returns {import('./paths.mjs').SecretMatch | null}
  */
@@ -182,9 +146,16 @@ function classifyGrepGlob(glob) {
   for (const part of splitGlobList(glob)) {
     const positive = part.replace(/^!/, '');
     if (positive !== part) continue; // exclusão (`!.env*`) não lê nada
-    for (const expanded of expandGlobBraces(positive)) {
+    const { expansions, unresolved } = expandGlobBraces(positive);
+    for (const expanded of expansions) {
       const secret = classifySecretPath(expanded);
       if (secret) return secret;
+    }
+    if (unresolved.length > 0) {
+      return {
+        kind: 'file',
+        reason: `glob com chaves grande demais para análise (${positive.slice(0, 80)})`,
+      };
     }
   }
   return null;

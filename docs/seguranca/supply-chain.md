@@ -122,11 +122,14 @@ Pendências conhecidas (17/10/2026):
 
 ## Configuração do GitHub (fora do repositório)
 
-Lista completa em [.github/rulesets/README.md](../../.github/rulesets/README.md). Nada disso
-está aplicado ainda: comece pela seção "0. Bootstrap" daquele arquivo, que dá a ordem (criar
-`main` como branch padrão, ligar o relato privado de vulnerabilidades, o secret scanning e o
-dependency graph, configurar o squash com o título do PR e só então importar o ruleset, quando
-`ci-ok`, `security-ok` e `pr-title` estiverem verdes).
+Lista completa em [.github/rulesets/README.md](../../.github/rulesets/README.md). Em
+2026-10-19, a branch `main` já existia (no commit da fundação), mas ainda não era a padrão, e
+o resto não estava aplicado. A seção "0. Bootstrap" daquele arquivo dá o estado conferido e a
+ordem: trocar a branch padrão para `main`, ligar o dependency graph (sem ele o
+`dependency-review` reprova o `security-ok`), o relato privado de vulnerabilidades e o secret
+scanning, configurar variáveis, Actions, o squash com o título do PR e o Renovate, e só então
+importar o ruleset, quando `ci-ok`, `security-ok` e `pr-title` estiverem verdes num PR com base
+`main`.
 
 - ruleset com commits assinados e os checks `ci-ok`, `security-ok` e `pr-title`;
 - allowlist de actions e pin obrigatório por SHA;
