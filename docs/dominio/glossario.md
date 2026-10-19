@@ -55,7 +55,7 @@ Coluna "Onde": **db** = schema `app` de `@salon/db`; **core** = `@salon/scheduli
 | Versão | `version` | db | lock otimista: todo UPDATE incrementa |
 | Evento de auditoria | `appointment_events` (`event_type`: `created`, `status_changed`) | db | trilha append-only escrita por trigger |
 | Ator | `actor_type`: `customer`, `staff`, `system`, `unknown`; `actor_id` | db | quem causou a transição (via `withTenant`) |
-| Encaixe | `is_overbook` | planejado | bypass explícito e auditado do anti-overbooking. Não existe na fundação |
+| Encaixe | `is_overbook` | planejado | bypass explícito e auditado do anti-overbooking: só dono ou gerente/recepção com permissão explícita, com motivo obrigatório de lista fechada registrado em `appointment_events`; nunca pela página pública. Não existe na fundação |
 | Lista de espera | `waitlist_entries` | planejado | cliente aguardando vaga |
 | Confirmou presença | `client_confirmed_at` | planejado | **atributo**, não status: o cliente tocou "Confirmo" no lembrete |
 | Comissão | `commission_bps` (basis points: 1% = 100) | db | parte do **profissional** sobre o item |

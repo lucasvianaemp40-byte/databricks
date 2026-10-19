@@ -1,9 +1,11 @@
 # ADR-0006: Hospedagem e residência de dados no Brasil
 
-- **Status:** Proposto. Depende de validação de custo, plano dos fornecedores e contrato. Não
-  há deploy nesta iteração.
+- **Status:** Aceito (decisão delegada pelo dono em 2026-10-19; revisável). Relida no aceite,
+  sem mudança de conteúdo. A validação de custo, plano dos fornecedores e contrato continua
+  nas ações decorrentes: se reprovar, um ADR novo substitui este (o plano B é a AWS
+  `sa-east-1`). Não há deploy nesta iteração.
 - **Data:** 2026-10-17
-- **Relacionados:** [arquitetura, seção 8](../arquitetura.md#8-hospedagem-e-residência-de-dados-proposta),
+- **Relacionados:** [arquitetura, seção 8](../arquitetura.md#8-hospedagem-e-residência-de-dados-planejado),
   [checklist contratual](../lgpd/checklist-contratual.md)
 
 ## Contexto
@@ -34,7 +36,7 @@
   | Supabase | `sa-east-1` |
   | Railway | nenhuma região no Brasil |
 
-## Decisão (proposta)
+## Decisão
 
 | Componente | Escolha | Detalhes |
 |---|---|---|

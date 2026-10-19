@@ -4,38 +4,62 @@ O que os arquivos de `.github/` pressupõem e que só se configura pela interfac
 Nada aqui é aplicado automaticamente: siga a lista ao criar ou revisar o repositório. Quem
 aplica é o dono do repositório; agentes só documentam e listam o que falta no PR.
 
-## 0. Bootstrap (repositório que já existe, com branch padrão diferente de `main`)
+## 0. Bootstrap: estado atual e o que falta
 
-Caso deste repositório na primeira entrega: a branch padrão é uma branch antiga
-(`claude/databricks-refat-jobs-list-lzssir`, só com `.gitignore` e um script), sem `main`, sem
-workflows e sem ruleset. Enquanto for assim, os gatilhos `push: branches: [main]` não disparam
-e os crons não rodam (agendamento só vale com o workflow na branch padrão). Em ordem:
+Estado conferido pela API do GitHub em 2026-10-19:
 
-1. Crie `main` a partir do commit atual da branch padrão (assim o diff do PR da fundação não
-   muda) e torne-a a branch padrão (**Settings > General > Default branch**). Alternativa:
-   renomeie a branch padrão para `main` (os PRs abertos são reapontados).
-2. Reaponte a base do PR da fundação para `main`.
-3. Ligue já o **private vulnerability reporting**, o secret scanning, o push protection e o
-   dependency graph (seção 3): o repositório é público, o `SECURITY.md` aponta o relato
-   privado como único canal e o job `dependency-review` (parte do `security-ok`) falha sem o
-   dependency graph.
-4. Crie as variáveis da seção 4 (`SCORECARD_PUBLISH=true`; `GHAS_ENABLED` só se o repositório
-   for privado sem GitHub Code Security).
-5. Em **Settings > General > Pull Requests**: deixe só "Allow squash merging", com "Default
-   commit message" = **Pull request title** (`squash_merge_commit_title=PR_TITLE`). Só squash
-   é redundante com o `allowed_merge_methods` do ruleset, mas vale também enquanto o ruleset
-   não existe. O check `pr-title` (`pr-title.yml`) passa esse título no commitlint e roda de
-   novo a cada edição do PR (evento `edited`), lendo o título atual pela API. Ele cobre a
-   mensagem padrão, não a final: o diálogo de squash ainda deixa quem faz o merge editar o
+- O PR da fundação (#2) foi mergeado na branch padrão antiga,
+  `claude/databricks-refat-jobs-list-lzssir`, que **continua sendo a padrão**.
+- A branch `main` já existe, no mesmo commit (`52d687b`). O push que a criou rodou o CI
+  (`ci-ok` verde), o Security (`security-ok` verde; o `dependency-review` só roda em PR) e o
+  CodeQL (verde). O Scorecard falhou com "Only the default branch
+  claude/databricks-refat-jobs-list-lzssir is supported": ele só roda na branch padrão.
+- No último commit do PR da fundação, `ci-ok` e `pr-title` ficaram verdes. O `security-ok`
+  ficou vermelho só por causa do `dependency-review`: "Dependency review is not supported on
+  this repository" (dependency graph desligado).
+- Não há ruleset. O private vulnerability reporting está desligado. Os três métodos de merge
+  estão liberados, e o squash usa o título `COMMIT_OR_PR_TITLE`. Secret scanning e push
+  protection não foram conferidos: a API não devolve esse estado sem permissão de
+  administrador.
+
+Enquanto a padrão for a branch antiga, os agendamentos (cron) e o `workflow_dispatch` rodam o
+que estiver nela, que deixa de receber merges quando os PRs passam a mirar a `main`. Em ordem:
+
+1. **Branch padrão = `main`** (**Settings > General > Default branch**). Reaponte para `main` a
+   base dos PRs ainda abertos contra a branch antiga. Depois, rode o Scorecard pelo
+   `workflow_dispatch` (ou espere o próximo push na `main`) e confira que ele passa.
+2. **Segurança** (seção 3): ligue o **dependency graph** e os Dependabot alerts, o que destrava
+   o `dependency-review` e, com ele, o `security-ok` dos PRs; o secret scanning e o push
+   protection; e o **private vulnerability reporting**, único canal do `SECURITY.md` num
+   repositório público. Confira com `gh api repos/<dono>/<repo>/private-vulnerability-reporting`
+   (deve responder `{"enabled":true}`).
+3. **Variáveis e segredos** (seção 4): `SCORECARD_PUBLISH=true`. O repositório é público,
+   então `GHAS_ENABLED` fica sem definir. Para a revisão do Claude no CI, o segredo
+   `ANTHROPIC_API_KEY` dedicado, num workspace com limite de gasto.
+4. **Actions** (seção 2): allowlist de actions, pin obrigatório por SHA completo, permissões
+   de workflow só de leitura (sem criar nem aprovar PR) e aprovação para contribuidor externo.
+5. **Pull Requests** (**Settings > General > Pull Requests**): deixe só "Allow squash merging",
+   com "Default commit message" = **Pull request title** (`squash_merge_commit_title=PR_TITLE`).
+   Só squash é redundante com o `allowed_merge_methods` do ruleset, mas vale também enquanto o
+   ruleset não existe. O check `pr-title` (`pr-title.yml`) passa esse título no commitlint e
+   roda de novo a cada edição do PR (evento `edited`), lendo o título atual pela API. Ele cobre
+   a mensagem padrão, não a final: o diálogo de squash ainda deixa quem faz o merge editar o
    texto.
-6. Instale o app do Renovate com leitura de "Dependabot alerts".
-7. Importe `main.json` (item 2 da seção 1) **só quando `ci-ok`, `security-ok` e `pr-title`
-   estiverem verdes no PR da fundação**: o ruleset não tem bypass, e um check vermelho
-   bloquearia o próprio PR que traz a correção.
-8. Faça o merge (squash) do PR da fundação. No clone local, rode
-   `git remote set-head origin --auto`: o hook `guard-files` usa `origin/HEAD` para saber
-   quais migrações já estão publicadas.
-9. Opcional: apague ou arquive a branch antiga.
+6. **Renovate:** instale o app com leitura de "Dependabot alerts".
+7. **Ruleset:** importe `main.json` (seção 1, item 2) **só quando `ci-ok`, `security-ok` e
+   `pr-title` estiverem verdes num PR com base `main`** aberto depois dos passos 1 e 2 (o
+   primeiro serve). Os verdes do push que criou a `main` não bastam: o `pr-title` só roda em
+   PR, e o `security-ok` de PR inclui o `dependency-review`. O ruleset não tem bypass, e um
+   check vermelho bloquearia o próprio PR que traz a correção.
+8. **Apague a branch antiga** (`claude/databricks-refat-jobs-list-lzssir`) depois do passo 1.
+   Antes, confira que ela não tem nada fora da `main`:
+   `git log --oneline origin/main..origin/claude/databricks-refat-jobs-list-lzssir` deve sair
+   vazio (em 2026-10-19 as duas estavam em `52d687b`).
+9. **Em cada clone local:** `git fetch --prune origin` e `git remote set-head origin --auto`.
+   O hook `guard-files` usa `origin/HEAD` para saber quais migrações já estão publicadas, e ele
+   continua apontando para a branch antiga até esse comando. Na nuvem, o `session-start.sh` só
+   roda o `set-head` quando o `origin/HEAD` não existe: num clone em que ele já aponta para a
+   branch antiga, rode o comando à mão.
 
 ## 1. Branch padrão e ruleset
 
@@ -137,7 +161,9 @@ cada run da revisão do Claude.
 
 ## 5. Ainda não configurado
 
-- **Deploy** (`deploy.yml`): fica para quando houver alvo definido. Desenho previsto: build sem
+- **Deploy** (`deploy.yml`): fica para o item T1 do backlog. O alvo está decidido no
+  [ADR-0006](../../docs/adr/0006-hospedagem-e-residencia.md) (Vercel `gru1`, Neon
+  `aws-sa-east-1`, Fly `gru`), com custo e contrato ainda a validar. Desenho previsto: build sem
   privilégio num job, deploy noutro com `environment: production` (revisores obrigatórios, só
   `main`), OIDC (`id-token: write`) para a nuvem, `cache-mode: none` e nenhum `pnpm install` no
   job privilegiado.

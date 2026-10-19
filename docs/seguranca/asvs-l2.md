@@ -167,7 +167,7 @@ Tudo planejado para a próxima iteração ([ADR-0004](../adr/0004-autenticacao-b
 | ID | Nível | Requisito (resumo) | Como atendemos | Status |
 |---|---|---|---|---|
 | 16.2.1 / 16.2.2 | L2 | Logs com quem, quando, onde e o quê, em UTC | `appointment_events` com ator, transição e instante. Logs da aplicação em pino JSON com `requestId`, `tenantId` e `userId` | Parcial |
-| 16.2.5 | L2 | Tratar dado sensível em log conforme a classificação | Regra Semgrep `pii-in-logs` (inclusive `console.*`, Sentry e analytics). Redaction no pino e no Sentry ([ADR-0010](../adr/0010-observabilidade.md), proposto) | Parcial |
+| 16.2.5 | L2 | Tratar dado sensível em log conforme a classificação | Regra Semgrep `pii-in-logs` (inclusive `console.*`, Sentry e analytics). Redaction no pino e no Sentry ([ADR-0010](../adr/0010-observabilidade.md), aceito; implementação no T2) | Parcial |
 | 16.3.1–16.3.3 | L2 | Logar autenticação, falhas de autorização e tentativas de bypass | Eventos `auth.*`, `authz.denied`, `ratelimit.hit`, `rls.violation` | Planejado |
 | 16.4.2 / 16.4.3 | L2 | Logs protegidos contra alteração e enviados a sistema separado | `appointment_events` append-only (bloqueado até para o dono). Dreno externo de logs | Parcial |
 | 16.5.1 | L2 | Mensagem de erro genérica | Páginas de erro só com `digest`; `@salon/db` traduz erros sem `DETAIL` (que pode conter dado pessoal) | Atendido |

@@ -1,6 +1,7 @@
 # ADR-0004: Autenticação com Better Auth (organizações, 2FA, passkeys)
 
-- **Status:** Proposto. Implementação na próxima iteração; nada disto está no código ainda.
+- **Status:** Aceito (decisão delegada pelo dono em 2026-10-19; revisável). Relida no aceite,
+  sem mudança de conteúdo. Implementação na próxima iteração; nada disto está no código ainda.
 - **Data:** 2026-10-17
 - **Relacionados:** [ADR-0002](0002-isolamento-multi-tenant-rls.md), [ASVS L2](../seguranca/asvs-l2.md),
   [backlog E1](../produto/backlog-inicial.md#e1-autenticação-e-organizações)
@@ -40,7 +41,7 @@ documentação do repositório `better-auth/better-auth`:
   `defaultCookieAttributes.secure: true` (conferido em `dist/cookies/index.mjs`). Só
   `cookiePrefix` geraria `__Secure-__Host-…`.
 
-## Decisão (proposta)
+## Decisão
 
 Usar o **Better Auth**, na versão estável mais nova fora da quarentena (`better-auth` e
 `@better-auth/*` sempre na mesma versão).

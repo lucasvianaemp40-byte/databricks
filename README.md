@@ -127,11 +127,12 @@ garante isso. Leia o README do pacote antes de mexer nele:
 
 ## Como contribuir
 
-1. Crie uma branch a partir de `main`. Push direto para `main` é bloqueado pelo ruleset
-   **depois que ele for importado**: a proteção da branch, os checks obrigatórios e os commits
-   assinados dependem da configuração em
-   [.github/rulesets/README.md](.github/rulesets/README.md), seção "0. Bootstrap", que ainda
-   não foi aplicada. O agente também é barrado pelo hook `guard-bash`.
+1. Crie uma branch a partir de `main` e abra o PR contra ela. A `main` já existe, com a
+   fundação, mas em 2026-10-19 ainda não era a branch padrão nem tinha ruleset. Push direto
+   para `main` só é bloqueado pelo GitHub **depois que o ruleset for importado**: a proteção da
+   branch, os checks obrigatórios e os commits assinados dependem dos passos da seção
+   "0. Bootstrap" de [.github/rulesets/README.md](.github/rulesets/README.md). O agente já é
+   barrado pelo hook `guard-bash`.
 2. Use TDD: o teste falha primeiro, depois vem o código. Nenhum teste é enfraquecido para
    passar (ver [CLAUDE.md](CLAUDE.md), seção "Regras inegociáveis"). O lint barra `.only`,
    `.skip`, `.todo` e equivalentes. O que escapar dele, os meta-testes de higiene de cada

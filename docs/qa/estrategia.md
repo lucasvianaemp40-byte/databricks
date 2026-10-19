@@ -136,10 +136,11 @@ Nunca baixe um limiar para o PR passar (regra do CLAUDE.md).
   `Pacific/Kiritimati` e com `CI=1`: propriedade acima de 120 s conta como falha. Em falha, o
   resumo do run traz a semente do Vitest, as linhas FAIL e o `seed`/`path` do fast-check, com
   os comandos acima. Não é check obrigatório. O cron e o disparo manual só valem com o arquivo
-  na branch padrão (documentação do GitHub sobre `schedule` e `workflow_dispatch`;
-  [bootstrap](../../.github/rulesets/README.md#0-bootstrap-repositório-que-já-existe-com-branch-padrão-diferente-de-main)):
-  até o merge da fundação, o equivalente é rodar os comandos acima localmente. O benchmark de
-  `computeAvailableSlots` no noturno é [planejado].
+  na branch padrão (documentação do GitHub sobre `schedule` e `workflow_dispatch`). Desde o
+  merge da fundação (PR #2, 2026-10-19), ele está na branch padrão, que ainda é a antiga até a
+  troca para `main` ([bootstrap](../../.github/rulesets/README.md#0-bootstrap-estado-atual-e-o-que-falta));
+  a primeira execução agendada não foi conferida. O benchmark de `computeAvailableSlots` no
+  noturno é [planejado].
 
   Todo contraexemplo reduzido vira **teste de exemplo de regressão**.
 

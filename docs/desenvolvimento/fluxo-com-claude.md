@@ -12,7 +12,7 @@ agente segue estão no [CLAUDE.md](../../CLAUDE.md).
 |---|---|---|---|
 | `CLAUDE.md` | sim | sim | sim |
 | `.claude/skills/`, `.claude/agents/`, `.claude/rules/` | sim | sim | sim |
-| Hooks e permissões do `.claude/settings.json` | sim (`allow` só depois de confiar no workspace; `deny`, `ask` e hooks valem sempre) | sim, mas edição de arquivo roda sem perguntar em qualquer modo: as regras `ask` de `Edit(...)` não pedem confirmação (ver abaixo) | **não**: use o *setup script* do ambiente |
+| Hooks e permissões do `.claude/settings.json` | sim (`allow` só depois de confiar no workspace; `deny`, `ask` e hooks valem sempre) | sim, mas edição de arquivo roda sem perguntar em qualquer modo: nem as regras `ask` de `Edit(...)` nem o `ask` devolvido por hook interrompem a edição; o `deny` do `guard-bash` barra (ver abaixo) | **não**: use o *setup script* do ambiente |
 | `.mcp.json` (Playwright) | sim, com aprovação | sim, conecta sem perguntar | sim |
 | Plugins de marketplace (`enabledPlugins`) | sim, depois de confiar no workspace | depende do marketplace estar registrado no container: numa sessão verificada, os do `claude-plugins-official` carregaram e os da `trailofbits` não | não verificado |
 
@@ -39,8 +39,15 @@ agente segue estão no [CLAUDE.md](../../CLAUDE.md).
   `Edit(/.claude/settings.json)` em `permissions.ask`. Por isso o `guard-files` passou a pedir
   confirmação (ask) ele mesmo para Edit/Write/MultiEdit/NotebookEdit em `.claude/settings*.json`
   e `.claude/hooks/` (testes em `.claude/hooks/test/guard-files.test.mjs`), além da leitura do
-  diff no PR (seção 10). **Não verificado:** se um `ask` emitido por hook pede confirmação na
-  nuvem ou é aprovado automaticamente; se for aprovado, resta a leitura do diff.
+  diff no PR (seção 10).
+- **O `ask` de hook também não interrompe na nuvem.** Em 2026-10-19, numa sessão na nuvem
+  deste repositório, o `guard-files` devolveu `ask` para Edit em `.claude/hooks/**` e em
+  `.claude/settings*.json`, e a edição foi aplicada sem interrupção. Na nuvem, então, o
+  controle real sobre a edição desses arquivos pelas ferramentas de arquivo é a **revisão do
+  PR**. O que continua valendo lá: a escrita por Bash e Monitor é negada (`deny` do
+  `guard-bash`), e o job `hooks` do CI (dentro do `ci-ok`) roda `pnpm test:hooks`, em que o
+  `kit-wiring.test.mjs` falha se o `settings.json` deixar de registrar o `guard-bash`, com
+  `onFailure: block`, para Bash e Monitor. No CLI local, o mesmo `ask` pede confirmação.
 
 Por isso toda proteção essencial continua vendorizada em `.claude/`, e os plugins são
 complemento em qualquer ambiente ([ADR-0011](../adr/0011-plugins-e-mcp-na-nuvem.md)).
@@ -139,7 +146,7 @@ e `/code-review`.
 | Evento | Hook | Efeito |
 |---|---|---|
 | Antes de Bash e Monitor | `guard-bash` (matcher `Bash\|Monitor`) | analisa o comando do Bash e o script de shell do Monitor; o Monitor com fonte `ws` (WebSocket, sem shell) passa sem decisão. Em 2026-10-18, numa sessão real, o Monitor com `cat` de um `.env` foi negado pelo hook. **Nega**: comandos destrutivos, `sudo`, `curl \| sh`, `push --force`, push para `main` (inclusive pela configuração do repositório), `--no-verify` (inclusive abreviado), hooks Git desligados, leitura ou despejo de segredos e do ambiente (também por variável, `$(...)`, `xargs`, `sed`, `awk` e outras linguagens), histórico do shell e estado do Claude Code, escrita em lockfile, em migração publicada e na configuração do agente, do projeto e do usuário (`~/.claude/settings.json`; também por `cd` + caminho relativo, interpretadores, edição in-place como `perl -lpi` e `sed -i`, `tee`, `dd of=`, glob, `cp -t`/`--target-directory` apontando para `.claude/hooks` e membro de `tar`), e `playwright cli` com `attach`, `--profile` ou `--persistent`. Opções de interpretadores e shells são lidas pela tabela de cada binário (agrupadas, anexadas ou com valor: `python3 -Ic`, `node -r x -e`, `bash -eo pipefail -c`); opções longas do git, por prefixo único (`--forc` ambíguo é negado); wrappers como `env -S`, `setsid`, `strace`, `taskset` e `corepack` são desembrulhados. **Pede confirmação**: SQL destrutivo, reset ou migração de banco, deploy, dependência nova, configs Git que executam comando (inclusive o transporte `ext::` por `protocol.allow` ou `GIT_ALLOW_PROTOCOL`), sandboxes que executam outro comando (`unshare`, `bwrap`, `firejail`), `git push --all`, `git apply` (sempre), escrita em configuração de hooks Git ou do MCP, cópia ou extração para dentro de `.claude/` e `playwright cli` com `run-code`, `eval`, `state-*` ou cookies. Falha fechada. Lista completa em [.claude/README.md](../../.claude/README.md#hooks) |
-| Antes de ler, buscar ou editar arquivo | `guard-files` | nega `.env*` (exceto `.env.example`), chaves, certificados, diretórios de credenciais, histórico do shell e estado do Claude Code (inclusive via link simbólico; no Grep, cada parte do glob); nega edição manual de lockfile e de migração que já está na branch padrão; pede confirmação para escrever configuração de hooks Git e do MCP, a configuração do agente no escopo do usuário e para acrescentar dica de exclusão de cobertura (`v8`/`c8`/`istanbul ignore`, `node:coverage`) em `src/`, `test/` ou `e2e/` de um pacote. Para `.claude/settings*.json` e `.claude/hooks/` pede confirmação (o ask nativo de `permissions.ask` não pede na nuvem, seção 1). Falha fechada |
+| Antes de ler, buscar ou editar arquivo | `guard-files` | nega `.env*` (exceto `.env.example`), chaves, certificados, diretórios de credenciais, histórico do shell e estado do Claude Code (inclusive via link simbólico; no Grep, cada parte do glob); nega edição manual de lockfile e de migração que já está na branch padrão; pede confirmação para escrever configuração de hooks Git e do MCP, a configuração do agente no escopo do usuário e para acrescentar dica de exclusão de cobertura (`v8`/`c8`/`istanbul ignore`, `node:coverage`) em `src/`, `test/` ou `e2e/` de um pacote. Para `.claude/settings*.json` e `.claude/hooks/` pede confirmação, o que vale no CLI local; na nuvem, nem o ask nativo de `permissions.ask` nem o ask do hook interrompem a edição (seção 1). Falha fechada |
 | Depois de editar | `post-edit-quality` | `biome check --write` + ESLint no arquivo editado; o problema que sobrar volta para o agente |
 | Fim do turno | `stop-typecheck` | typecheck dos pacotes alterados e dependentes; erro bloqueia o encerramento uma vez |
 | Envio de prompt | `guard-prompt` | bloqueia prompt com segredo colado (chave, token, URL de banco com senha) |
@@ -288,10 +295,12 @@ terminal e no Cowork. **Não foi verificado** se essa sincronização vale para 
   o merge: essa área é alvo de worms de supply chain. Hoje o controle técnico são os hooks e as
   regras nativas: o `guard-bash` nega escrita por shell (Bash e Monitor) em
   `.claude/settings*.json` e `.claude/hooks/`; a edição desses caminhos pelas ferramentas
-  Edit/Write pede confirmação pelo `guard-files` (as regras nativas `permissions.ask` **não
-  pedem na nuvem**, onde edição de arquivo roda sem perguntar, seção 1); e o `guard-files`
-  pede confirmação também para `.mcp.json` e `.claude/mcp/`. O CODEOWNERS só identifica o dono: com uma pessoa no projeto, o
-  ruleset não exige aprovação, e a revisão obrigatória de code owner entra com a segunda pessoa
+  Edit/Write pede confirmação pelo `guard-files` no CLI local; e o `guard-files` pede
+  confirmação também para `.mcp.json` e `.claude/mcp/`. **Na nuvem, essas confirmações não
+  interrompem** (nem a regra nativa nem o `ask` do hook, verificado em 2026-10-19, seção 1):
+  lá, a edição pelas ferramentas de arquivo só é barrada pela revisão do PR. O CODEOWNERS só
+  identifica o dono: com uma pessoa no projeto, o ruleset não exige aprovação, e a revisão
+  obrigatória de code owner entra com a segunda pessoa
   ([.github/rulesets/README.md](../../.github/rulesets/README.md#1-branch-padrão-e-ruleset)).
 - **Atualizar material de terceiros:** troque o SHA em
   [`scripts/vendor-claude-skills.sh`](../../scripts/vendor-claude-skills.sh), rode o script e

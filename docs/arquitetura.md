@@ -70,7 +70,7 @@ flowchart TB
     jobs["pg-boss: lembretes, expiração de holds,<br/>no-show, retenção (papel app_worker)"]
   end
 
-  subgraph dados["Dados em São Paulo [proposta]"]
+  subgraph dados["Dados em São Paulo [planejado]"]
     pg[("PostgreSQL (Neon aws-sa-east-1)<br/>schema app com RLS; schema pgboss")]
     redis[("Upstash Redis sa-east-1<br/>rate limit da página pública")]
   end
@@ -91,7 +91,7 @@ flowchart TB
 | `@salon/scheduling-core` | TypeScript puro + `temporal-polyfill` | `computeAvailableSlots`, intervalos, hora de parede, máquina de estados | [fundação] |
 | `@salon/db` | Drizzle ORM 0.45 + `pg` | schema `app`, migrações imutáveis, `withTenant`, tradução de erros do banco | [fundação] |
 | Worker | Node 24 + pg-boss 12 | jobs agendados e assíncronos | [planejado] ([ADR-0005](adr/0005-fila-pg-boss.md)) |
-| PostgreSQL | 18 em CI, 16 local; Neon em produção | fonte de verdade; RLS; EXCLUDE; fila | [fundação] schema / [proposta] hospedagem |
+| PostgreSQL | 18 em CI, 16 local; Neon em produção | fonte de verdade; RLS; EXCLUDE; fila | [fundação] schema / [planejado] hospedagem ([ADR-0006](adr/0006-hospedagem-e-residencia.md)) |
 | Redis | Upstash | rate limit da página pública e do OTP | [planejado] |
 
 **Regras de dependência entre pacotes** (o lint as impõe):
@@ -331,7 +331,9 @@ Decisão em [ADR-0005](adr/0005-fila-pg-boss.md).
 | `appointment.no-show-check` | X min após o início (opcional por salão) | transição validada pela máquina de estados |
 | `lgpd.retention` | diária | por tenant, com métricas |
 
-- O job é enfileirado **na mesma transação** do agendamento: rollback desfaz o job.
+- O job é enfileirado **na mesma transação** do agendamento: rollback desfaz o job. Quem
+  enfileira é o `app_user`, com GRANT mínimo no schema `pgboss` (cria job, não lê nem altera a
+  fila), porque as tabelas do pg-boss não têm `tenant_id` nem RLS.
 - O worker conecta como `app_worker`, que lê o tenant do job e só altera
   `appointments.status` (e `occupancies.active`, que o trigger recalcula), por GRANT de coluna.
   Abre `withTenant` por job com ator `system`. Job que precise escrever outra coluna exige
@@ -340,9 +342,10 @@ Decisão em [ADR-0005](adr/0005-fila-pg-boss.md).
 - O worker roda em processo long-running, separado do serverless. Ele usa conexão direta
   (sem pooler em modo transação), porque o pg-boss usa `LISTEN/NOTIFY`.
 
-## 8. Hospedagem e residência de dados [proposta]
+## 8. Hospedagem e residência de dados [planejado]
 
-Decisão em [ADR-0006](adr/0006-hospedagem-e-residencia.md).
+Decisão em [ADR-0006](adr/0006-hospedagem-e-residencia.md), aceita em 2026-10-19 por delegação
+do dono. Custo, plano dos fornecedores e contrato ainda precisam ser validados.
 
 | Componente | Provedor e região | Observação |
 |---|---|---|
@@ -372,7 +375,7 @@ Decisão em [ADR-0006](adr/0006-hospedagem-e-residencia.md).
 
 ## 9. Observabilidade [planejado]
 
-Decisão proposta em [ADR-0010](adr/0010-observabilidade.md) (item T2 do backlog). Resumo:
+Decisão em [ADR-0010](adr/0010-observabilidade.md) (implementação no item T2 do backlog). Resumo:
 
 - **Logs:** pino em JSON com `time` em UTC, `requestId`, `tenantId` e `userId`. A redaction
   cobre cookies, `authorization`, telefone, e-mail, OTP e tokens. O IP fica só nos registros
@@ -400,11 +403,11 @@ Decisão proposta em [ADR-0010](adr/0010-observabilidade.md) (item T2 do backlog
 | [0001](adr/0001-monorepo-e-stack.md) | Monorepo e stack, com versões |
 | [0002](adr/0002-isolamento-multi-tenant-rls.md) | Isolamento multi-tenant com RLS |
 | [0003](adr/0003-tempo-e-fusos-temporal.md) | Tempo e fusos com Temporal |
-| [0004](adr/0004-autenticacao-better-auth.md) | Autenticação com Better Auth (proposta) |
-| [0005](adr/0005-fila-pg-boss.md) | Fila pg-boss (proposta) |
-| [0006](adr/0006-hospedagem-e-residencia.md) | Hospedagem e residência de dados (proposta) |
+| [0004](adr/0004-autenticacao-better-auth.md) | Autenticação com Better Auth |
+| [0005](adr/0005-fila-pg-boss.md) | Fila pg-boss |
+| [0006](adr/0006-hospedagem-e-residencia.md) | Hospedagem e residência de dados |
 | [0007](adr/0007-politica-de-supply-chain.md) | Política de supply chain |
 | [0008](adr/0008-desenvolvimento-assistido-por-ia.md) | Desenvolvimento assistido por IA |
 | [0009](adr/0009-lint-biome-eslint.md) | Lint com Biome + ESLint enxuto |
-| [0010](adr/0010-observabilidade.md) | Observabilidade: logs, erros e eventos de segurança (proposta) |
+| [0010](adr/0010-observabilidade.md) | Observabilidade: logs, erros e eventos de segurança |
 | [0011](adr/0011-plugins-e-mcp-na-nuvem.md) | Plugins e MCP do Playwright nas sessões na nuvem |

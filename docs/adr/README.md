@@ -12,20 +12,21 @@ segue a proposta de Michael Nygard
 | [0001](0001-monorepo-e-stack.md) | Monorepo pnpm + Turborepo e stack com versões | Aceito |
 | [0002](0002-isolamento-multi-tenant-rls.md) | Isolamento multi-tenant com PostgreSQL RLS | Aceito |
 | [0003](0003-tempo-e-fusos-temporal.md) | Tempo e fusos com Temporal e fuso IANA por unidade | Aceito |
-| [0004](0004-autenticacao-better-auth.md) | Autenticação com Better Auth (organizações, 2FA, passkeys) | Proposto (próxima iteração) |
-| [0005](0005-fila-pg-boss.md) | Fila de jobs com pg-boss no próprio PostgreSQL | Proposto |
-| [0006](0006-hospedagem-e-residencia.md) | Hospedagem e residência de dados no Brasil | Proposto |
+| [0004](0004-autenticacao-better-auth.md) | Autenticação com Better Auth (organizações, 2FA, passkeys) | Aceito (decisão delegada pelo dono em 2026-10-19; revisável) |
+| [0005](0005-fila-pg-boss.md) | Fila de jobs com pg-boss no próprio PostgreSQL | Aceito (decisão delegada pelo dono em 2026-10-19; revisável; GRANT mínimo do `app_user` no `pgboss` incluído no aceite) |
+| [0006](0006-hospedagem-e-residencia.md) | Hospedagem e residência de dados no Brasil | Aceito (decisão delegada pelo dono em 2026-10-19; revisável) |
 | [0007](0007-politica-de-supply-chain.md) | Política de cadeia de suprimentos | Aceito |
 | [0008](0008-desenvolvimento-assistido-por-ia.md) | Desenvolvimento assistido por IA (kit Claude Code) | Aceito (decisão 3 substituída pelo ADR-0011) |
 | [0009](0009-lint-biome-eslint.md) | Lint e formatação: Biome + ESLint enxuto | Aceito |
-| [0010](0010-observabilidade.md) | Observabilidade: logs, erros e eventos de segurança | Proposto (iteração 1, T2) |
+| [0010](0010-observabilidade.md) | Observabilidade: logs, erros e eventos de segurança | Aceito (decisão delegada pelo dono em 2026-10-19; revisável) |
 | [0011](0011-plugins-e-mcp-na-nuvem.md) | Plugins e MCP do Playwright nas sessões na nuvem | Aceito |
 
 ## Como escrever um ADR
 
 1. Copie o [modelo](0000-modelo.md) para `NNNN-titulo-curto.md`, usando o próximo número livre.
 2. Status inicial **Proposto**. Ele vira **Aceito** quando o PR que o introduz é aprovado e a
-   implementação começa.
+   implementação começa, ou antes disso, quando o dono decide ou delega a decisão. O status
+   diz quem decidiu e quando, e um ajuste feito no aceite é explicado no próprio ADR.
 3. ADR aceito não é reescrito. Para mudar a decisão, escreva um ADR novo e marque o antigo
    como **Substituído por ADR-NNNN**. Correções de fato (link quebrado, versão de patch) são
    permitidas e devem ficar registradas no histórico do Git.

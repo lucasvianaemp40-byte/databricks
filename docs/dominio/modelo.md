@@ -117,6 +117,14 @@ domínio: uma folga registrada sobre agendamentos existentes não os cancela. A 
 reserva revalida as folgas (seção 5, passo 3), e o painel deve alertar a recepção sobre
 agendamentos dentro de uma folga nova [planejado].
 
+**Encaixe (overbook)** [planejado, E3.7]: a única exceção prevista ao I1. Política decidida em
+2026-10-19 (caso de abuso A14 do [modelo de ameaças](../seguranca/modelo-de-ameacas.md#6-casos-de-abuso-do-agendamento)):
+só o dono, ou gerente/recepção com permissão explícita dada pelo dono, encaixa; nunca o
+profissional, o cliente, o worker nem a página pública (canal `online`). O motivo é
+obrigatório, escolhido de uma lista fechada, sem texto livre, e fica em `appointment_events`
+com o ator. Hoje o `EXCLUDE` não tem bypass: o desenho técnico ainda passa por threat model e
+revisão de migração.
+
 ## 3. Máquina de estados do agendamento
 
 ```mermaid

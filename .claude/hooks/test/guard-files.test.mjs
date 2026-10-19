@@ -64,6 +64,13 @@ describe('segredos', () => {
     ['Grep', { pattern: 'KEY', glob: '*.{ts,json}' }, 'none'],
     ['Grep', { pattern: 'KEY', glob: '*' }, 'none'],
     ['Grep', { pattern: 'KEY', glob: '.*' }, 'none'],
+    // Sequência de chaves e teto da expansão: o que não dá para expandir inteiro é negado.
+    ['Grep', { pattern: 'KEY', glob: '.e{n..n}v' }, 'deny'],
+    ['Grep', { pattern: 'KEY', glob: '{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{.env,x}' }, 'deny'],
+    ['Grep', { pattern: 'KEY', glob: '{1..100}.ts' }, 'deny'],
+    ['Grep', { pattern: 'KEY', glob: '{a..p}em' }, 'deny'],
+    ['Grep', { pattern: 'KEY', glob: '*.{ts,tsx,js,jsx,mjs,cjs}' }, 'none'],
+    ['Grep', { pattern: 'KEY', glob: 'src/{a..c}/*.ts' }, 'none'],
     ['Read', { file_path: '/root/.bash_history' }, 'deny'],
     ['Read', { file_path: '/root/.claude.json' }, 'deny'],
     ['Read', { file_path: '/root/.claude/projects/-repo/abc.jsonl' }, 'deny'],

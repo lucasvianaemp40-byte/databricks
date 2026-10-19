@@ -1,7 +1,9 @@
 # ADR-0010: Observabilidade (logs, erros e eventos de segurança)
 
-- **Status:** Proposto (iteração 1, item T2 do [backlog](../produto/backlog-inicial.md#transversal-antes-ou-durante-o-mvp)).
-  Nada disto existe no código ainda. A fundação tem só as páginas de erro com `digest`, o
+- **Status:** Aceito (decisão delegada pelo dono em 2026-10-19; revisável). Relida no aceite,
+  sem mudança de conteúdo. Implementação na iteração 1, item T2 do
+  [backlog](../produto/backlog-inicial.md#transversal-antes-ou-durante-o-mvp). Nada disto
+  existe no código ainda. A fundação tem só as páginas de erro com `digest`, o
   `/api/health` mínimo, a auditoria `appointment_events` e a regra Semgrep `pii-in-logs`.
 - **Data:** 2026-10-17
 - **Relacionados:** [arquitetura, seção 9](../arquitetura.md#9-observabilidade-planejado),
@@ -38,7 +40,7 @@ Fatos (registry npm e pesquisa de stack de 16/10/2026):
 
 Não verificado: disponibilidade da região UE no plano do Sentry que contratarmos.
 
-## Decisão (proposta)
+## Decisão
 
 1. **Logs da aplicação com pino**, em JSON, com `time` ISO em UTC e os campos `requestId`,
    `tenantId`, `userId` (IDs opacos) e `event`. Um logger só por processo
