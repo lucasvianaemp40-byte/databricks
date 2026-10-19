@@ -32,11 +32,19 @@ function nonceOf(response: APIResponse): string {
   return nonce ?? '';
 }
 
+/**
+ * Tags de abertura <script> do documento. O HTML não diferencia maiúsculas no nome da tag, então
+ * a busca também não (`<SCRIPT>` sem nonce passaria despercebido numa regex sensível a caixa).
+ */
+function scriptTags(html: string): string[] {
+  return html.match(/<script\b[^>]*>/gi) ?? [];
+}
+
 /** Documento HTML com CSP na resposta e o nonce dela em todos os <script>. */
 async function expectDocumentUnderCsp(response: APIResponse): Promise<void> {
   expect(header(response, 'content-type')).toContain('text/html');
   const nonce = nonceOf(response);
-  const scripts = (await response.text()).match(/<script\b[^>]*>/g) ?? [];
+  const scripts = scriptTags(await response.text());
   expect(scripts.length, 'scripts do Next no documento').toBeGreaterThan(0);
   for (const tag of scripts) {
     expect(tag).toContain(`nonce="${nonce}"`);
@@ -101,13 +109,13 @@ test.describe('Content-Security-Policy', () => {
     const nonce = nonceOf(response);
     const html = await response.text();
 
-    const scripts = html.match(/<script\b[^>]*>/g) ?? [];
+    const scripts = scriptTags(html);
     expect(scripts.length).toBeGreaterThan(0);
     for (const tag of scripts) {
       expect(tag).toContain(`nonce="${nonce}"`);
     }
     // Atributos style="…" seriam bloqueados pela style-src sem 'unsafe-inline'.
-    expect(html).not.toMatch(/\sstyle="/);
+    expect(html).not.toMatch(/\sstyle\s*=/i);
   });
 
   test('ignora nonce e CSP forjados pelo cliente', async ({ request }) => {
