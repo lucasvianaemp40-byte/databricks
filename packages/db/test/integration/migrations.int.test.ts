@@ -17,6 +17,7 @@ const EXPECTED_TAGS = [
   '0001_private_functions',
   '0002_schema',
   '0003_tenant_security',
+  '0004_staff_schedule_lock',
 ];
 
 interface Journal {
@@ -142,9 +143,8 @@ describe('runner de migrações', () => {
     const journalPath = join(folder, 'meta', '_journal.json');
     const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as Journal;
     // Simula um merge: a migração do outro branch foi gerada antes da 0003.
-    const third = journal.entries[3];
     const second = journal.entries[2];
-    if (third === undefined || second === undefined) {
+    if (journal.entries[3]?.tag !== '0003_tenant_security' || second === undefined) {
       throw new Error('journal inesperado');
     }
     journal.entries.splice(3, 0, {
@@ -154,8 +154,10 @@ describe('runner de migrações', () => {
       tag: '0003_from_other_branch',
       breakpoints: true,
     });
-    third.idx = 4;
-    third.tag = '0003_tenant_security';
+    // As entradas seguintes andam uma posição.
+    for (const [index, entry] of journal.entries.entries()) {
+      entry.idx = index;
+    }
     writeFileSync(journalPath, JSON.stringify(journal, null, 2));
     writeFileSync(join(folder, '0003_from_other_branch.sql'), 'SELECT 1;');
     await expect(runMigrations({ databaseUrl: url, migrationsFolder: folder })).rejects.toThrow(

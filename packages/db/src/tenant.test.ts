@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import type pg from 'pg';
 import { afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 import { createDb } from './client';
+import { SlotUnavailableError, TransactionConflictError } from './errors';
 import { parseTenantId, type TenantTransaction, withTenant } from './tenant';
 
 describe('parseTenantId', () => {
@@ -229,6 +230,80 @@ describe('withTenant: guarda da conexão (cliente falso, sem banco)', () => {
     expect(fake.release.mock.calls[0]?.[0]).toBeInstanceOf(Error);
     slowGate.resolve(undefined);
     await orphan;
+  });
+});
+
+/** Erro como o node-postgres entrega (só o SQLSTATE importa aqui). */
+function postgresError(code: string): Error {
+  return Object.assign(new Error(`erro ${code}`), { code });
+}
+
+describe('withTenant: conflito transitório (deadlock, serialização) repete a transação', () => {
+  const db = createDb('postgresql://127.0.0.1:1/inexistente', { onPoolError: () => undefined });
+
+  /** Toda tentativa recebe o mesmo cliente falso; o spy conta as conexões pedidas ao pool. */
+  function stubConnect(fake: ReturnType<typeof fakeConnection>) {
+    // O tipo do spy pega a sobrecarga com callback de Pool.connect; withTenant usa a de Promise.
+    const connect = vi.spyOn(db.$client, 'connect') as unknown as MockInstance<
+      () => Promise<pg.PoolClient>
+    >;
+    connect.mockResolvedValue(fake.client);
+    return connect;
+  }
+
+  /** A consulta 'reserva' falha com `code` nas primeiras `failures` vezes; o resto passa. */
+  function connectionFailingWith(code: string, failures: number) {
+    let remaining = failures;
+    const fake = fakeConnection((text) => {
+      if (text.includes('reserva') && remaining > 0) {
+        remaining -= 1;
+        return Promise.reject(postgresError(code));
+      }
+      return Promise.resolve(undefined);
+    });
+    const connect = stubConnect(fake);
+    const callback = vi.fn(async (tx: TenantTransaction) => {
+      await tx.execute(sql`select 'reserva'`);
+      return 'reservado';
+    });
+    return { fake, connect, callback };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('deadlock (40P01): repete o callback numa transação nova e devolve o resultado', async () => {
+    const { fake, connect, callback } = connectionFailingWith('40P01', 1);
+    await expect(withTenant(db, TENANT_ID, callback)).resolves.toBe('reservado');
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(connect).toHaveBeenCalledTimes(2);
+    // A tentativa que falhou terminou em ROLLBACK e a conexão voltou limpa ao pool.
+    expect(fake.received.filter((text) => text === 'rollback')).toHaveLength(1);
+    expect(fake.received.filter((text) => text === 'commit')).toHaveLength(1);
+    expect(fake.release.mock.calls).toEqual([[undefined], [undefined]]);
+  });
+
+  it('falha de serialização persistente (40001): desiste depois de 3 tentativas', async () => {
+    const { callback } = connectionFailingWith('40001', Number.POSITIVE_INFINITY);
+    const outcome = withTenant(db, TENANT_ID, callback);
+    await expect(outcome).rejects.toBeInstanceOf(TransactionConflictError);
+    await expect(outcome).rejects.toMatchObject({
+      code: 'TRANSACTION_CONFLICT',
+      sqlState: '40001',
+    });
+    expect(callback).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    ['horário tomado (23P01)', postgresError('23P01'), SlotUnavailableError],
+    ['erro de regra no callback', new Error('regra de negócio'), Error],
+  ])('não repete o que não é transitório: %s', async (_label, failure, ErrorClass) => {
+    const connect = stubConnect(fakeConnection());
+    const callback = vi.fn(() => Promise.reject(failure));
+    await expect(withTenant(db, TENANT_ID, callback)).rejects.toBeInstanceOf(ErrorClass);
+    expect(callback).toHaveBeenCalledOnce();
+    expect(connect).toHaveBeenCalledOnce();
   });
 });
 

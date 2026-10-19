@@ -1,9 +1,11 @@
+import { randomInt } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type { PgTransactionConfig } from 'drizzle-orm/pg-core';
 import type pg from 'pg';
 import type { Database } from './client';
-import { mapDatabaseError, TransactionClosedError } from './errors';
+import { mapDatabaseError, TransactionClosedError, TransactionConflictError } from './errors';
 import { isUuid } from './ids';
 import * as schema from './schema';
 
@@ -48,6 +50,14 @@ function parseAuditActor(actor: AuditActor): AuditActor {
   }
   return actor;
 }
+
+/**
+ * Tentativas ao todo quando o PostgreSQL aborta a transação por deadlock (40P01) ou falha de
+ * serialização (40001): a documentação dele manda repetir a transação inteira nesses casos.
+ */
+const MAX_ATTEMPTS = 3;
+/** Teto da espera antes da 2ª tentativa; dobra a cada nova tentativa (jitter total). */
+const RETRY_BASE_DELAY_MS = 25;
 
 /** Comandos com que o Drizzle encerra a transação (`sql`commit`` / `sql`rollback``). */
 const TRANSACTION_END: ReadonlySet<string> = new Set(['commit', 'rollback']);
@@ -124,7 +134,13 @@ function guardConnection(connection: pg.PoolClient): GuardedConnection {
  * - Também fixa `TimeZone = UTC` e `DateStyle = ISO` na transação, para que timestamptz
  *   chegue em um formato que o Drizzle converte para `Date` sem ambiguidade.
  * - Erros do banco saem traduzidos (`SlotUnavailableError`, `TenantIsolationError`,
- *   `InvalidStatusTransitionError`, `IdempotencyKeyConflictError`); os demais, inalterados.
+ *   `InvalidStatusTransitionError`, `IdempotencyKeyConflictError`,
+ *   `TransactionConflictError`); os demais, inalterados.
+ * - Deadlock (40P01) ou falha de serialização (40001): o PostgreSQL abortou a transação para
+ *   resolver um conflito com outra. `withTenant` repete a transação inteira, numa conexão
+ *   nova, até 3 tentativas com espera aleatória curta; se persistir, lança
+ *   `TransactionConflictError`. Por isso `fn` pode rodar mais de uma vez: dentro dela, só
+ *   trabalho na transação (nada de e-mail, HTTP ou fila fora do banco).
  * - Recebe o `db` (pool), não uma transação: aninhar `withTenant` exigiria trocar de tenant
  *   no meio de uma transação, o que o tipo `Database` impede.
  */
@@ -146,6 +162,27 @@ export async function withTenant<T>(
     ...(options.readOnly === true ? { accessMode: 'read only' as const } : {}),
   };
 
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await runTransaction(db, id, actor, config, fn);
+    } catch (error) {
+      if (!(error instanceof TransactionConflictError) || attempt >= MAX_ATTEMPTS) {
+        throw error;
+      }
+    }
+    // Jitter total: as vítimas do mesmo conflito não voltam todas ao mesmo tempo.
+    await delay(randomInt(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1) + 1));
+  }
+}
+
+/** Uma tentativa: conexão própria, transação, contexto do tenant, `fn` e erro traduzido. */
+async function runTransaction<T>(
+  db: Database,
+  id: string,
+  actor: AuditActor | undefined,
+  config: PgTransactionConfig,
+  fn: (tx: TenantTransaction) => Promise<T>,
+): Promise<T> {
   let connection: pg.PoolClient;
   try {
     connection = await db.$client.connect();
