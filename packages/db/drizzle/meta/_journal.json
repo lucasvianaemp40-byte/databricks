@@ -36,6 +36,41 @@
       "when": 1792421328732,
       "tag": "0004_staff_schedule_lock",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792456463383,
+      "tag": "0005_auth_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792456487583,
+      "tag": "0006_auth_role",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792456488926,
+      "tag": "0007_auth_security",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793364040053,
+      "tag": "0008_auth_rate_limit_id_default",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793365263088,
+      "tag": "0009_auth_id_defaults",
+      "breakpoints": true
     }
   ]
 }

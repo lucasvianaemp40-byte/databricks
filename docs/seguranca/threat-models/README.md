@@ -5,6 +5,14 @@ pessoal, pagamento (Pix), autenticação, papéis, página pública, integraçõ
 webhooks), arquivos ou jobs. O modelo geral do sistema está em
 [../modelo-de-ameacas.md](../modelo-de-ameacas.md).
 
+## Índice
+
+| Data | Feature | Arquivo | Situação |
+|---|---|---|---|
+| 2026-10-20 | Login, cadastro e onboarding do salão (E1.1, E1.3, E1.9/E1.10 parcial, E2.1) | [2026-10-20-login-cadastro-onboarding.md](2026-10-20-login-cadastro-onboarding.md) | v1, antes da implementação; LC-06 a decidir (bloqueia produção) |
+
+Threat model novo entra nesta tabela no mesmo PR.
+
 ## Como gerar
 
 No Claude Code, rode a skill `threat-model` com a descrição da feature. Ela usa o agente

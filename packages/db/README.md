@@ -54,6 +54,7 @@ const rows = await withTenant(
   | 42501 | `TenantIsolationError` | RLS recusou a linha ou falta privilégio; responda 404 |
   | 23514 (trigger) | `InvalidStatusTransitionError` | transição de status proibida |
   | 23505 (`idempotency_key`) | `IdempotencyKeyConflictError` | comando de criação repetido |
+  | 23505 (`tenants_slug_key`, `organizations_slug_key`) | `SlugUnavailableError` | endereço público do salão em uso (o slug é público: "indisponível" não vaza nada) |
   | 23505 (`<tabela>_pkey`) | `IdentifierConflictError` | id já usado, possivelmente por OUTRO tenant; responda genérico (404/409), nunca "já existe" |
   | 40P01, 40001 | `TransactionConflictError` | conflito com outra transação que persistiu depois das 3 tentativas; responda 503 com `Retry-After` curto |
   | (nenhum) | `TransactionClosedError` | `tx` usado depois do fim do callback (bug do chamador) |
@@ -68,11 +69,41 @@ const rows = await withTenant(
 - O pacote não importa `server-only`, para rodar em testes e scripts. O app web deve importá-lo
   apenas de módulos de servidor.
 
+### Autenticação e criação do salão (papel `app_auth`)
+
+Decisão em [ADR-0012](../../docs/adr/0012-papel-app-auth-e-provisionamento.md). O schema
+`auth` (`src/schema/auth.ts`) guarda as tabelas do Better Auth: `users`, `sessions`,
+`accounts`, `verifications`, `rate_limits`, `organizations` (id = id do tenant, FK para
+`app.tenants`) e `members` (papel `owner`, `admin` ou `member`). Sem RLS e só para o papel
+`app_auth`: `app_user` e `app_worker` não têm acesso nenhum a esse schema.
+
+```ts
+const authDb = createDb(env.DATABASE_URL_AUTH); // papel app_auth
+
+// Cria tenant, primeira unidade, organização e vínculo owner numa transação só.
+const { tenantId } = await provisionTenant(authDb, {
+  ownerUserId: session.user.id, // da SESSÃO, nunca do corpo
+  tenant: { name, slug },
+  location: { name: locationName, slug: locationSlug, timezone },
+});
+
+// Fonte do tenantId do servidor: os vínculos da pessoa da sessão.
+const memberships = await listMemberships(authDb, session.user.id);
+```
+
+- `provisionTenant` trava a linha do usuário (`FOR UPDATE`) e confere os vínculos antes de
+  gravar: um salão por conta, e dois envios simultâneos não criam dois salões. Lança
+  `OwnerNotEligibleError` (conta inexistente ou e-mail não confirmado),
+  `TenantAlreadyProvisionedError` ou `SlugUnavailableError`; fuso inválido cai no CHECK (23514).
+- O `app_auth` só INSERE em `app.tenants` (com `status = 'trial'`) e `app.locations`: não lê,
+  não altera e não apaga dado de tenant. A RESTRICTIVE de tenant continua valendo.
+- `SLUG_PATTERN` é exportado para o app validar o mesmo padrão dos CHECKs de slug.
+
 ## Modelo (schema `app`)
 
 | Tabela | Conteúdo |
 |---|---|
-| `tenants` | salão (raiz do isolamento; `slug` público e único global) |
+| `tenants` | salão (raiz do isolamento; `slug` público e único global; criado por `provisionTenant`) |
 | `locations` | unidade, com **fuso IANA** validado contra o tzdata (nome `Area/Local` sem dígito: recusa offset fixo, inclusive `Etc/GMT+3`, e o fallback POSIX do PostgreSQL) e regras do agendamento online |
 | `staff` | profissional com vínculo `owner`, `employee`, `partner` ou `freelancer` |
 | `services` | duração, fases (`ServicePhase` do core: `work`/`pause`), buffers, preço em centavos e comissão em bps |
@@ -196,6 +227,10 @@ migração aplicada cujo arquivo mudou.
 | `0002_schema` | `app_migrator` | gerada pelo drizzle-kit a partir de `src/schema` |
 | `0003_tenant_security` | `app_migrator` | triggers, EXCLUDE, RLS, GRANTs e função de invariantes |
 | `0004_staff_schedule_lock` | `app_migrator` | fila por profissional ao gravar ocupação ativa (sem deadlock no EXCLUDE) |
+| `0005_auth_schema` | `app_migrator` | schema `auth` (Better Auth), gerado pelo drizzle-kit a partir de `src/schema/auth.ts` |
+| `0006_auth_role` | usuário da conexão | papel `app_auth` (idempotente; corrige atributos perigosos) e CONNECT |
+| `0007_auth_security` | `app_migrator` | GRANTs do `app_auth`, políticas de INSERT do provisionamento e função de invariantes estendida |
+| `0008_auth_rate_limit_id_default`, `0009_auth_id_defaults` | `app_migrator` | `DEFAULT gen_random_uuid()` nos ids do Better Auth (ele não envia o id no PostgreSQL) |
 
 ```bash
 pnpm --filter @salon/db generate --name=<descricao>   # mudou src/schema
@@ -278,12 +313,13 @@ Cobertura de integração:
 
 ## Variáveis de ambiente
 
-Veja `.env.example`. Resumo: `DATABASE_URL` (app_user), `DATABASE_URL_WORKER` (app_worker),
-`DATABASE_URL_MIGRATOR` (superusuário/admin, só no deploy) e `TEST_DATABASE_URL` (testes).
+Veja `.env.example`. Resumo: `DATABASE_URL` (app_user), `DATABASE_URL_AUTH` (app_auth, Better
+Auth e provisionamento), `DATABASE_URL_WORKER` (app_worker), `DATABASE_URL_MIGRATOR`
+(superusuário/admin, só no deploy) e `TEST_DATABASE_URL` (testes).
 
 ## Produção (pendências documentadas)
 
-- Senhas de `app_user`/`app_worker` são definidas fora do repositório (`ALTER ROLE ... PASSWORD`
+- Senhas de `app_user`/`app_worker`/`app_auth` são definidas fora do repositório (`ALTER ROLE ... PASSWORD`
   via IaC/console). Use TLS (`sslmode=verify-full`).
 - O admin que roda as migrações precisa de CREATEROLE e de `SET` em `app_migrator`. O bootstrap
   concede o `SET` a quem criou o papel. Em provedores como o Neon, papéis criados pelo console
@@ -294,8 +330,10 @@ Veja `.env.example`. Resumo: `DATABASE_URL` (app_user), `DATABASE_URL_WORKER` (a
 - O bootstrap revoga o CREATE de PUBLIC no schema `public`. Se o admin não for dono do schema,
   o REVOKE só avisa e a função de invariantes recusa o deploy enquanto um papel de runtime
   puder criar objetos ali: rode o REVOKE como dono do banco.
-- Ainda não implementado (próximas iterações): tabelas do Better Auth (schema `auth`, papel
-  `app_auth`); resolução pública `slug -> tenant` para a página de agendamento (função
+- Ainda não implementado (próximas iterações): tabelas dos plugins `twoFactor`, `passkey` e
+  `organization` completo (convites); troca dos GRANTs de INSERT do `app_auth` por uma função
+  `SECURITY DEFINER` de provisionamento (LC-22, [ADR-0012](../../docs/adr/0012-papel-app-auth-e-provisionamento.md));
+  revisão do INSERT/UPDATE do `app_user` em `app.tenants`; resolução pública `slug -> tenant` para a página de agendamento (função
   `SECURITY DEFINER` dedicada, já que `tenants` só é visível ao próprio tenant: entra em
   `executable_definers` da função de invariantes, com `search_path` fixo, dona do
   `app_migrator` e fechada a PUBLIC); job de expiração de holds e de no-show (pg-boss, papel

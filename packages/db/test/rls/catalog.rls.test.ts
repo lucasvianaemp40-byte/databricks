@@ -13,7 +13,7 @@ import {
 } from '../helpers/connections';
 import { createTenantFixture, type TenantFixture } from '../helpers/fixtures';
 
-const RUNTIME_ROLES = ['app_user', 'app_worker'] as const;
+const RUNTIME_ROLES = ['app_user', 'app_worker', 'app_auth'] as const;
 
 /**
  * Meta-testes de catálogo: verificam a configuração IMPLANTADA (não a declarada). Uma tabela
@@ -95,8 +95,18 @@ describe('catálogo: RLS, papéis e privilégios', () => {
     const { rows } = await admin.query(`
       SELECT rolname, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolreplication, rolinherit,
              rolcanlogin
-        FROM pg_roles WHERE rolname IN ('app_user', 'app_worker', 'app_migrator') ORDER BY rolname`);
+        FROM pg_roles WHERE rolname IN ('app_user', 'app_worker', 'app_auth', 'app_migrator') ORDER BY rolname`);
     expect(rows).toEqual([
+      {
+        rolname: 'app_auth',
+        rolsuper: false,
+        rolbypassrls: false,
+        rolcreaterole: false,
+        rolcreatedb: false,
+        rolreplication: false,
+        rolinherit: false,
+        rolcanlogin: true,
+      },
       {
         rolname: 'app_migrator',
         rolsuper: false,
@@ -135,28 +145,28 @@ describe('catálogo: RLS, papéis e privilégios', () => {
     const { rows: memberships } = await admin.query(`
       SELECT u.rolname AS member, r.rolname AS role
         FROM pg_roles u CROSS JOIN pg_roles r
-       WHERE u.rolname IN ('app_user', 'app_worker', 'app_migrator') AND r.oid <> u.oid
+       WHERE u.rolname IN ('app_user', 'app_worker', 'app_auth', 'app_migrator') AND r.oid <> u.oid
          AND pg_has_role(u.oid, r.oid, 'MEMBER')`);
     expect(memberships).toEqual([]);
   });
 
-  it('papéis de runtime não são donos de nenhum objeto; tudo em app/app_private é do app_migrator', async () => {
+  it('papéis de runtime não são donos de nenhum objeto; tudo em app/app_private/auth é do app_migrator', async () => {
     const { rows: owned } = await admin.query(`
       SELECT c.oid::regclass::text AS rel, pg_get_userbyid(c.relowner) AS owner
         FROM pg_class c
-       WHERE pg_get_userbyid(c.relowner) IN ('app_user', 'app_worker')
+       WHERE pg_get_userbyid(c.relowner) IN ('app_user', 'app_worker', 'app_auth')
       UNION ALL
       SELECT n.nspname, pg_get_userbyid(n.nspowner) FROM pg_namespace n
-       WHERE pg_get_userbyid(n.nspowner) IN ('app_user', 'app_worker')
+       WHERE pg_get_userbyid(n.nspowner) IN ('app_user', 'app_worker', 'app_auth')
       UNION ALL
       SELECT p.oid::regprocedure::text, pg_get_userbyid(p.proowner) FROM pg_proc p
-       WHERE pg_get_userbyid(p.proowner) IN ('app_user', 'app_worker')`);
+       WHERE pg_get_userbyid(p.proowner) IN ('app_user', 'app_worker', 'app_auth')`);
     expect(owned).toEqual([]);
 
     const { rows: notMigrator } = await admin.query(`
       SELECT c.oid::regclass::text AS rel, pg_get_userbyid(c.relowner) AS owner
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-       WHERE n.nspname IN ('app', 'app_private') AND c.relkind IN ('r', 'p', 'v', 'm', 'S')
+       WHERE n.nspname IN ('app', 'app_private', 'auth') AND c.relkind IN ('r', 'p', 'v', 'm', 'S')
          AND pg_get_userbyid(c.relowner) <> 'app_migrator'`);
     expect(notMigrator).toEqual([]);
   });
@@ -168,7 +178,7 @@ describe('catálogo: RLS, papéis e privilégios', () => {
         JOIN pg_namespace n ON n.oid = c.relnamespace
        CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
-         AND (acl.grantee = 0 OR pg_get_userbyid(acl.grantee) IN ('app_user', 'app_worker'))
+         AND (acl.grantee = 0 OR pg_get_userbyid(acl.grantee) IN ('app_user', 'app_worker', 'app_auth'))
          AND acl.privilege_type NOT IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE')`);
     expect(rows).toEqual([]);
 
@@ -310,6 +320,72 @@ describe('catálogo: RLS, papéis e privilégios', () => {
        WHERE n.nspname = 'app' AND c.relkind = 'v'
          AND NOT coalesce(c.reloptions @> ARRAY['security_invoker=true'], false)`);
     expect(rows).toEqual([]);
+  });
+
+  it('app_auth: CRUD nas tabelas de login, só SELECT/INSERT em organizações e vínculos, só INSERT em tenants e unidades', async () => {
+    const { rows } = await admin.query<{ rel: string; privileges: string }>(`
+      SELECT c.oid::regclass::text AS rel,
+             string_agg(acl.privilege_type, ',' ORDER BY acl.privilege_type) AS privileges
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+       CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
+       WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+         AND pg_get_userbyid(acl.grantee) = 'app_auth'
+       GROUP BY 1 ORDER BY 1`);
+    expect(rows).toEqual([
+      { rel: 'app.locations', privileges: 'INSERT' },
+      { rel: 'app.tenants', privileges: 'INSERT' },
+      { rel: 'auth.accounts', privileges: 'DELETE,INSERT,SELECT,UPDATE' },
+      { rel: 'auth.members', privileges: 'INSERT,SELECT' },
+      { rel: 'auth.organizations', privileges: 'INSERT,SELECT' },
+      { rel: 'auth.rate_limits', privileges: 'DELETE,INSERT,SELECT,UPDATE' },
+      { rel: 'auth.sessions', privileges: 'DELETE,INSERT,SELECT,UPDATE' },
+      { rel: 'auth.users', privileges: 'DELETE,INSERT,SELECT,UPDATE' },
+      { rel: 'auth.verifications', privileges: 'DELETE,INSERT,SELECT,UPDATE' },
+    ]);
+    const { rows: columns } = await admin.query(`
+      SELECT c.oid::regclass::text AS rel, a.attname
+        FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+       CROSS JOIN LATERAL aclexplode(a.attacl) AS acl
+       WHERE pg_get_userbyid(acl.grantee) = 'app_auth'`);
+    expect(columns).toEqual([]);
+  });
+
+  it('schema auth: só o app_auth tem USAGE; app_user, app_worker e PUBLIC não acessam nada nele', async () => {
+    const { rows } = await admin.query(`
+      SELECT r AS role, has_schema_privilege(r, 'auth', 'USAGE') AS usage,
+             has_schema_privilege(r, 'auth', 'CREATE') AS create
+        FROM unnest(ARRAY['app_auth', 'app_user', 'app_worker', 'public']) AS r ORDER BY r`);
+    expect(rows).toEqual([
+      { role: 'app_auth', usage: true, create: false },
+      { role: 'app_user', usage: false, create: false },
+      { role: 'app_worker', usage: false, create: false },
+      { role: 'public', usage: false, create: false },
+    ]);
+    const { rows: grants } = await admin.query(`
+      SELECT c.oid::regclass::text AS rel, acl.grantee
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+       CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
+       WHERE n.nspname = 'auth'
+         AND (acl.grantee = 0 OR pg_get_userbyid(acl.grantee) IN ('app_user', 'app_worker'))`);
+    expect(grants).toEqual([]);
+  });
+
+  it('políticas do app_auth em app: só PERMISSIVE FOR INSERT em tenants e locations', async () => {
+    const { rows } = await admin.query(`
+      SELECT c.relname AS table, p.polname AS policy, p.polcmd::text AS cmd, p.polpermissive
+        FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
+       WHERE (SELECT oid FROM pg_roles WHERE rolname = 'app_auth') = ANY (p.polroles)
+       ORDER BY c.relname`);
+    expect(rows).toEqual([
+      { table: 'locations', policy: 'auth_provisioning', cmd: 'a', polpermissive: true },
+      { table: 'tenants', policy: 'auth_provisioning', cmd: 'a', polpermissive: true },
+    ]);
+    const { rows: tenantsCheck } = await admin.query<{ check: string }>(`
+      SELECT pg_get_expr(p.polwithcheck, p.polrelid) AS check
+        FROM pg_policy p WHERE p.polrelid = 'app.tenants'::regclass AND p.polname = 'auth_provisioning'`);
+    expect(tenantsCheck[0]?.check).toMatch(/^\(status = 'trial'(::text)?\)$/);
   });
 
   it('assert_security_invariants() passa no banco migrado', async () => {
@@ -500,6 +576,81 @@ describe('catálogo: RLS, papéis e privilégios', () => {
       'app_worker apagando dados',
       'GRANT DELETE ON app.customers TO app_worker',
       /app\.customers: privilégio DELETE .*app_worker/,
+    ],
+    [
+      'app_auth com BYPASSRLS',
+      'ALTER ROLE app_auth BYPASSRLS',
+      /papel app_auth é SUPERUSER ou BYPASSRLS/,
+    ],
+    [
+      'app_auth herdando outro papel',
+      'GRANT app_user TO app_auth',
+      /app_auth é membro de app_user/,
+    ],
+    [
+      'app_auth lendo dado de tenant',
+      'GRANT SELECT ON app.customers TO app_auth',
+      /app\.customers: privilégio SELECT .*app_auth só insere em app\.tenants e app\.locations/,
+    ],
+    [
+      'app_auth alterando o salão',
+      'GRANT UPDATE ON app.tenants TO app_auth',
+      /app\.tenants: privilégio UPDATE .*app_auth só insere em app\.tenants e app\.locations/,
+    ],
+    [
+      'app_user lendo usuários e sessões',
+      'GRANT USAGE ON SCHEMA auth TO app_user; GRANT SELECT ON auth.sessions TO app_user',
+      /auth\.sessions: privilégio SELECT .*schema auth é só do app_auth/,
+    ],
+    [
+      'app_auth trocando papel ou apagando vínculo',
+      'GRANT UPDATE, DELETE ON auth.members TO app_auth',
+      /auth\.members: privilégio UPDATE \(app_auth só lê e insere organizações e vínculos\)/,
+    ],
+    [
+      'política FOR ALL do app_auth em tabela de tenant',
+      'CREATE POLICY auth_leak ON app.customers AS PERMISSIVE FOR ALL TO app_auth USING (true)',
+      /app\.customers: política auth_leak do app_auth além do INSERT de provisionamento/,
+    ],
+    [
+      'app_auth criando salão já ativo (política sem status = trial)',
+      'ALTER POLICY auth_provisioning ON app.tenants WITH CHECK (true)',
+      /app\.tenants: política auth_provisioning do app_auth além do INSERT de provisionamento/,
+    ],
+    [
+      'privilégio repassável (WITH GRANT OPTION) para papel de runtime',
+      'GRANT SELECT ON auth.users TO app_auth WITH GRANT OPTION',
+      /auth\.users: privilégio SELECT WITH GRANT OPTION concedido a app_auth/,
+    ],
+    [
+      'privilégio de coluna repassável para papel de runtime',
+      'GRANT SELECT (full_name) ON app.customers TO app_user WITH GRANT OPTION',
+      /app\.customers: privilégio SELECT \(coluna full_name\) WITH GRANT OPTION concedido a app_user/,
+    ],
+    [
+      'PUBLIC lendo usuários',
+      'GRANT SELECT ON auth.users TO PUBLIC',
+      /auth\.users: privilégio SELECT .*concedido a PUBLIC/,
+    ],
+    [
+      'app_user lendo o e-mail por GRANT de coluna',
+      'GRANT USAGE ON SCHEMA auth TO app_user; GRANT SELECT (email) ON auth.users TO app_user',
+      /auth\.users: privilégio SELECT \(coluna email; schema auth é só do app_auth\)/,
+    ],
+    [
+      'app_auth escolhendo o status do salão por GRANT de coluna',
+      'GRANT UPDATE (status) ON app.tenants TO app_auth',
+      /app\.tenants: privilégio UPDATE \(coluna status; app_auth só insere/,
+    ],
+    [
+      'USAGE de PUBLIC no schema auth',
+      'GRANT USAGE ON SCHEMA auth TO PUBLIC',
+      /schema auth: USAGE para PUBLIC/,
+    ],
+    [
+      'tabela do schema auth com outro dono',
+      'ALTER TABLE auth.sessions OWNER TO postgres',
+      /auth\.sessions pertence a postgres/,
     ],
     [
       'SECURITY DEFINER com search_path sem pg_temp no fim',

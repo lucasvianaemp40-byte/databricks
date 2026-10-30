@@ -89,5 +89,11 @@ export function matchesPattern(column: SQL | AnyPgColumn, pattern: string): SQL 
   return sql`${column} ~ ${sql.raw(`'${pattern}'`)}`;
 }
 
+/**
+ * Slug de URL (salão e unidade): minúsculas, dígitos e hífen, 1 a 63 caracteres, sem hífen
+ * nas pontas. O app valida o mesmo padrão antes de gravar (teste de paridade no @salon/web).
+ */
+export const SLUG_PATTERN = '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$';
+
 /** Telefone em E.164 (+ e 8 a 15 dígitos, sem zero inicial no código do país). */
 export const E164_PATTERN = '^\\+[1-9][0-9]{7,14}$';

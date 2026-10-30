@@ -5,6 +5,7 @@ import {
   E164_PATTERN,
   idColumn,
   matchesPattern,
+  SLUG_PATTERN,
   tenantIdColumn,
   timestamps,
 } from './columns';
@@ -44,7 +45,7 @@ export const locations = appSchema.table(
       foreignColumns: [tenants.id],
     }),
     check('locations_name_length', sql`char_length(${t.name}) BETWEEN 1 AND 120`),
-    check('locations_slug_format', matchesPattern(t.slug, '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')),
+    check('locations_slug_format', matchesPattern(t.slug, SLUG_PATTERN)),
     check('locations_timezone_valid', sql`app_private.is_valid_iana_timezone(${t.timezone})`),
     check('locations_phone_e164', matchesPattern(t.phoneE164, E164_PATTERN)),
     check(

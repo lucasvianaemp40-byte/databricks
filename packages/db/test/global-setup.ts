@@ -13,7 +13,7 @@ import {
  * Prepara o PostgreSQL dos testes de integração:
  *   1. cria um banco descartável a partir de TEST_DATABASE_URL (superusuário);
  *   2. aplica as migrações com o MESMO runner de produção (papéis, RLS, invariantes);
- *   3. define senhas aleatórias para app_user/app_worker e entrega as URLs aos testes;
+ *   3. define senhas aleatórias para app_user/app_worker/app_auth e entrega as URLs aos testes;
  *   4. ao final, apaga o banco.
  */
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
@@ -31,8 +31,10 @@ export default async function setup(project: TestProject): Promise<() => Promise
     await runMigrations({ databaseUrl: adminUrl });
     const appUserPassword = randomSecret();
     const appWorkerPassword = randomSecret();
+    const appAuthPassword = randomSecret();
     await setRolePassword(adminUrl, 'app_user', appUserPassword);
     await setRolePassword(adminUrl, 'app_worker', appWorkerPassword);
+    await setRolePassword(adminUrl, 'app_auth', appAuthPassword);
 
     project.provide('maintenanceDatabaseUrl', maintenanceUrl);
     project.provide('adminDatabaseUrl', adminUrl);
@@ -41,6 +43,7 @@ export default async function setup(project: TestProject): Promise<() => Promise
       'appWorkerDatabaseUrl',
       withCredentials(adminUrl, 'app_worker', appWorkerPassword),
     );
+    project.provide('appAuthDatabaseUrl', withCredentials(adminUrl, 'app_auth', appAuthPassword));
   } catch (error) {
     await dropDatabase(maintenanceUrl, database);
     throw error;

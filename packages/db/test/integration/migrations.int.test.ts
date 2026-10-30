@@ -18,6 +18,11 @@ const EXPECTED_TAGS = [
   '0002_schema',
   '0003_tenant_security',
   '0004_staff_schedule_lock',
+  '0005_auth_schema',
+  '0006_auth_role',
+  '0007_auth_security',
+  '0008_auth_rate_limit_id_default',
+  '0009_auth_id_defaults',
 ];
 
 interface Journal {

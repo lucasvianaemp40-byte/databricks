@@ -1,6 +1,13 @@
 import { sql } from 'drizzle-orm';
 import { check, text, unique } from 'drizzle-orm/pg-core';
-import { appSchema, idColumn, matchesPattern, sqlStringList, timestamps } from './columns';
+import {
+  appSchema,
+  idColumn,
+  matchesPattern,
+  SLUG_PATTERN,
+  sqlStringList,
+  timestamps,
+} from './columns';
 import { tenantStatuses } from './values';
 
 /**
@@ -21,7 +28,7 @@ export const tenants = appSchema.table(
   },
   (t) => [
     unique('tenants_slug_key').on(t.slug),
-    check('tenants_slug_format', matchesPattern(t.slug, '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')),
+    check('tenants_slug_format', matchesPattern(t.slug, SLUG_PATTERN)),
     check('tenants_name_length', sql`char_length(${t.name}) BETWEEN 1 AND 120`),
     check('tenants_status_valid', sql`${t.status} IN (${sqlStringList(tenantStatuses)})`),
   ],

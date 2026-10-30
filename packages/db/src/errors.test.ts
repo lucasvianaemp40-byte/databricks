@@ -8,6 +8,7 @@ import {
   InvalidStatusTransitionError,
   mapDatabaseError,
   SlotUnavailableError,
+  SlugUnavailableError,
   TenantIsolationError,
   TransactionConflictError,
 } from './errors';
@@ -79,6 +80,9 @@ describe('mapDatabaseError', () => {
     // A PK `id` é global: colidir com o id de outro tenant não pode virar "já existe".
     ['23505', 'customers_pkey', IdentifierConflictError, 'IDENTIFIER_CONFLICT'],
     ['23505', 'appointment_events_pkey', IdentifierConflictError, 'IDENTIFIER_CONFLICT'],
+    // Slug é público (URL da página do salão): "endereço indisponível" não vaza nada.
+    ['23505', 'tenants_slug_key', SlugUnavailableError, 'SLUG_UNAVAILABLE'],
+    ['23505', 'organizations_slug_key', SlugUnavailableError, 'SLUG_UNAVAILABLE'],
     // Transitórios: o PostgreSQL abortou a transação para resolver um conflito com outra.
     ['40P01', undefined, TransactionConflictError, 'TRANSACTION_CONFLICT'],
     ['40001', undefined, TransactionConflictError, 'TRANSACTION_CONFLICT'],
@@ -100,6 +104,8 @@ describe('mapDatabaseError', () => {
   it.each([
     ['23514 de outra constraint', pgError('23514', 'customers_phone_e164')],
     ['23505 de outra unique', pgError('23505', 'customers_tenant_phone_key')],
+    // O slug da UNIDADE é por tenant: a action trata (não é o endereço público do salão).
+    ['23505 do slug da unidade', pgError('23505', 'locations_tenant_id_slug_key')],
     ['23503 (FK)', pgError('23503', 'appointments_customer_fk')],
     ['erro que não é do banco', new Error('rede caiu')],
   ])('devolve inalterado: %s', (_label, error) => {

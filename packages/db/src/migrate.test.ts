@@ -44,14 +44,28 @@ describe('loadMigrations', () => {
     );
   });
 
-  it('só a migração de bootstrap (papéis e extensão) roda com o usuário da conexão', () => {
-    const privileged = loadMigrations()
-      .filter((migration) => migration.privileged)
-      .map((migration) => migration.tag);
-    expect(privileged).toEqual(['0000_bootstrap_roles_extensions']);
-    expect(
-      readFileSync(join(DEFAULT_MIGRATIONS_FOLDER, '0000_bootstrap_roles_extensions.sql'), 'utf8'),
-    ).toMatch(new RegExp(`^${PRIVILEGED_MIGRATION_MARKER}\\n`));
+  it('só as migrações de bootstrap (papéis e extensão) rodam com o usuário da conexão', () => {
+    const privileged = loadMigrations().filter((migration) => migration.privileged);
+    expect(privileged.map((migration) => migration.tag)).toEqual([
+      '0000_bootstrap_roles_extensions',
+      '0006_auth_role',
+    ]);
+    for (const migration of privileged) {
+      expect(readFileSync(join(DEFAULT_MIGRATIONS_FOLDER, `${migration.tag}.sql`), 'utf8')).toMatch(
+        new RegExp(`^${PRIVILEGED_MIGRATION_MARKER}\\n`),
+      );
+    }
+    // Fora a 0000 (extensão), uma migração privilegiada só cria e corrige papéis: objeto
+    // criado como superusuário não seria do app_migrator e escaparia das invariantes.
+    const roleOnly = privileged
+      .filter((migration) => migration.tag !== '0000_bootstrap_roles_extensions')
+      .flatMap((migration) => migration.statements)
+      .join('\n')
+      .replaceAll(/--[^\n]*/g, '');
+    expect(roleOnly).not.toMatch(
+      /\b(CREATE|ALTER|DROP)\s+(TABLE|FUNCTION|PROCEDURE|SCHEMA|POLICY|VIEW|TRIGGER|EXTENSION|INDEX|TYPE)\b/i,
+    );
+    expect(roleOnly).not.toMatch(/\bGRANT\s+(?!CONNECT\b)/i);
   });
 
   it('nenhuma migração usa recursos exclusivos do PostgreSQL 17/18 (alvo: 16 e 18)', () => {

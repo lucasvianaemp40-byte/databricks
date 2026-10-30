@@ -15,7 +15,7 @@ export default defineConfig({
   dialect: 'postgresql',
   schema: './src/schema/index.ts',
   out: './drizzle',
-  schemaFilter: ['app'],
+  schemaFilter: ['app', 'auth'],
   migrations: {
     schema: 'drizzle',
     table: '__drizzle_migrations',

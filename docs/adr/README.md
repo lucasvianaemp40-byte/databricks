@@ -20,6 +20,7 @@ segue a proposta de Michael Nygard
 | [0009](0009-lint-biome-eslint.md) | Lint e formatação: Biome + ESLint enxuto | Aceito |
 | [0010](0010-observabilidade.md) | Observabilidade: logs, erros e eventos de segurança | Aceito (decisão delegada pelo dono em 2026-10-19; revisável) |
 | [0011](0011-plugins-e-mcp-na-nuvem.md) | Plugins e MCP do Playwright nas sessões na nuvem | Aceito |
+| [0012](0012-papel-app-auth-e-provisionamento.md) | Papel `app_auth`, schema `auth` e provisionamento do salão | Aceito (substitui só o acesso do `app_user` a `auth` previsto no ADR-0004) |
 
 ## Como escrever um ADR
 

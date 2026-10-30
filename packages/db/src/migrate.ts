@@ -46,7 +46,7 @@ const INVARIANTS_FUNCTION = 'app_private.assert_security_invariants()';
 /** A partir desta migração a função de invariantes é obrigatória (ausência = falha). */
 const INVARIANTS_MIGRATION_TAG = '0003_tenant_security';
 /** Papéis cujos atributos o runner confere sem depender de código das migrações. */
-const RUNTIME_ROLES = ['app_user', 'app_worker'] as const;
+const RUNTIME_ROLES = ['app_user', 'app_worker', 'app_auth'] as const;
 
 /**
  * sha256 do corpo (`prosrc`) de `app_private.assert_security_invariants()` como definido nas
@@ -55,7 +55,7 @@ const RUNTIME_ROLES = ['app_user', 'app_worker'] as const;
  */
 export const INVARIANTS_FUNCTION_SHA256 =
   // biome-ignore lint/security/noSecrets: hash sha256 público do corpo da função, não é segredo.
-  '1abfe75cc0bcc97fb5c361cbbadb43763f3e64d484d223ab36588937b8e58fb6';
+  '8f886954ed4dd72fecceff1f66f9fc2a8de10bb7946317ef2cf44684f90a5c9b';
 
 export class MigrationError extends Error {
   constructor(message: string, options?: ErrorOptions) {
