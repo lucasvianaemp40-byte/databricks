@@ -21,6 +21,7 @@
     ".next/types/**/*.ts",
     "src",
     "e2e",
+    "scripts",
     "*.ts",
     "*.mts"
   ],

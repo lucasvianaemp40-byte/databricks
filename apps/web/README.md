@@ -1,8 +1,9 @@
 # @salon/web
 
-App Next.js 16 (App Router, `src/`) do Agenda Salão (nome provisório). Hoje é um **esqueleto
-andante seguro**: landing pública, página 404, health check, CSP com nonce, cabeçalhos de
-segurança, env validada e testes (unit, E2E, acessibilidade). Autenticação, banco, filas,
+App Next.js 16 (App Router, `src/`) do Agenda Salão (nome provisório): landing pública,
+**criar conta, confirmar e-mail, entrar, cadastrar o salão e a primeira unidade, painel e
+sair** (Better Auth, ADR-0004 e ADR-0012), página 404, health check, CSP com nonce, cabeçalhos
+de segurança, env validada e testes (unit, E2E com PostgreSQL real, acessibilidade). Filas,
 Sentry, WhatsApp e Pix entram nas próximas iterações (ver [Próximos passos](#próximos-passos)).
 
 ## Comandos
@@ -17,19 +18,28 @@ Rode da raiz do monorepo (`pnpm <script>`) ou só deste pacote (`pnpm --filter @
 | `typecheck` | `next typegen && tsc` (gera os tipos de rota antes; `next-env.d.ts` é ignorado no git) |
 | `lint`      | ESLint type-aware (`eslint.base.mjs` + Next + react-hooks); o Biome roda na raiz |
 | `test`      | Vitest: unit de `src/**/*.test.ts` (sem navegador e sem servidor)                |
-| `e2e`       | Playwright contra `next build && next start` (ver [E2E](#e2e))                   |
+| `e2e`       | Playwright contra `next build && next start`, com banco e outbox de e-mail (ver [E2E](#e2e)) |
 
 ## Estrutura
 
 ```
 src/
   app/                 App Router: layout, página inicial, 404, erros, /api/health, ícone
+    (auth)/            /entrar, /cadastro, /cadastro/confirme-seu-email, /cadastro/confirmado
+    app/               /app (painel) e /app/criar-salao (+ actions.ts, a Server Action)
+    api/auth/[...all]/ Better Auth atrás da lista fechada de rotas
+  components/          marca, campos de formulário, barra da área logada, botão Sair
+  lib/                 módulos puros (servidor e navegador): validação (zod), slug, fusos do
+                       Brasil, cliente de auth por fetch, mensagens de erro
   lib/security/        CSP (função pura), nonce, cabeçalhos estáticos (+ testes)
-  lib/appointment-status-labels.ts   rótulos pt-BR dos status do @salon/scheduling-core
-  env.ts               variáveis de ambiente validadas (Zod, @t3-oss/env-nextjs)
+  server/              só servidor (`server-only`): env do servidor, pools, Better Auth, DAL
+                       de sessão e tenant, e-mail (outbox), núcleo da criação do salão
+  env.ts               variáveis de ambiente do boot do Next (Zod, @t3-oss/env-nextjs)
+  instrumentation.ts   valida as variáveis só de servidor ao subir o `next start`/`next dev`
   proxy.ts             Proxy do Next 16: nonce + CSP por requisição
 e2e/                   Playwright: home, acessibilidade (axe), cabeçalhos de segurança, env em
-                       runtime, fixture de console (support/)
+                       runtime, autenticação (fluxo, API, isolamento), fixtures (support/)
+scripts/               with-e2e-database.ts: banco descartável e outbox para o `pnpm e2e`
 ```
 
 O `@salon/scheduling-core` é consumido como fonte TypeScript (`transpilePackages`). O app só
@@ -47,6 +57,20 @@ valores). Modelo em [`.env.example`](./.env.example).
 | `APP_ENV`  | servidor (runtime)      | `development`           | `development`, `test`, `e2e`, `preview` ou `production`. Só `production` é indexável     |
 | `APP_URL`  | servidor (runtime)      | `http://localhost:3000` | origem http(s) sem caminho/barra final; com `APP_ENV=production`, https e host não local |
 | `NODE_ENV` | compartilhada           | `development`           | definida pelo Next (`production` no build e no `next start`)                             |
+
+Variáveis **só do servidor** (banco e autenticação), em `src/server/env.ts`. Não são lidas no
+`next build` (o build não precisa de segredo nem de banco); o `src/instrumentation.ts` as valida
+no boot do `next start`/`next dev`, e o servidor não sobe se faltar ou sobrar algo:
+
+| Variável             | Regra                                                                                       |
+| -------------------- | ------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`       | obrigatória; `postgres://` do papel `app_user` (dados de tenant, sempre com `withTenant`)   |
+| `DATABASE_URL_AUTH`  | obrigatória; `postgres://` do papel `app_auth` (Better Auth e criação do salão), diferente da anterior |
+| `BETTER_AUTH_SECRET` | obrigatória; 32+ caracteres aleatórios, diferente do exemplo                                |
+| `MAIL_OUTBOX_DIR`    | opcional; caminho absoluto onde cada e-mail vira um arquivo 0600. Só com `APP_ENV` development, test ou e2e (recusada em preview/production) |
+
+Sem `MAIL_OUTBOX_DIR` não há transporte de e-mail: o cadastro fica desligado e nenhuma conta
+fica presa sem confirmação. É o caso de preview e production até entrar um provedor.
 
 Variáveis de servidor são lidas em **runtime**: a validação do boot e o valor usado pelo
 servidor são sempre os mesmos, e o mesmo build serve em outra origem ou ambiente sem rebuild
@@ -158,6 +182,34 @@ reverse proxy) antes de expor o app.
 - Páginas de erro em pt-BR mostram só o `digest` (o Next não envia a mensagem de erros do
   servidor ao navegador em produção).
 
+### Autenticação
+
+Better Auth 1.7.10 (ADR-0004, ADR-0012, [threat model](../../docs/seguranca/threat-models/2026-10-20-login-cadastro-onboarding.md)):
+
+- **Rotas expostas (lista fechada):** `POST /api/auth/sign-up/email`, `POST
+  /api/auth/sign-in/email`, `POST /api/auth/sign-out` e `GET /api/auth/verify-email`. Qualquer
+  outra (inclusive endpoint novo de uma atualização) responde 404 antes da biblioteca
+  (`server/auth/route-handler.ts`).
+- **Cadastro:** nome, e-mail e senha de 12 a 128 caracteres; validação estrita no hook `before`
+  (antes da busca pelo e-mail: mesma resposta para e-mail novo ou já cadastrado); e-mail
+  confirmado antes de qualquer acesso; **sem login automático depois de confirmar** (evita
+  sequestro de conta pré-cadastrada); o link de confirmação sempre volta para
+  `/cadastro/confirmado` e é montado sobre `APP_URL`, nunca sobre o `Host`.
+- **Sessão:** cookie `__Host-salon.session_token` (Secure, HttpOnly, SameSite=Lax, Path=/, sem
+  Domain), sem `cookieCache`, 12 h a partir do login (sem renovação deslizante nesta iteração).
+  O logout apaga a sessão no banco e responde com `Clear-Site-Data: "cache", "storage"`.
+- **Rate limit** no banco (`auth.rate_limits`) por `x-real-ip` (login: 5 por minuto; cadastro: 5
+  por hora). Em preview/production, requisição sem um `x-real-ip` válido é recusada (400).
+- **Autorização no servidor:** páginas e action relêem a sessão (`server/auth/session.ts`); o
+  tenant sai só do vínculo da pessoa (`listMemberships` pela conexão `app_auth`) e os dados do
+  salão são lidos por `withTenant(app_user)`.
+- **Logs sem dado pessoal:** o logger do Better Auth mascara e-mail, IP e tokens e nunca
+  imprime os argumentos (o `DrizzleQueryError` traz os parâmetros da consulta); falha inesperada
+  em `/api/auth` vira 500 genérico com log só do nome do erro e do SQLSTATE.
+- **Pendente (riscos aceitos no threat model, antes de qualquer dado de cliente em produção):**
+  MFA (E1.2), HIBP, Turnstile, reset de senha, convites, provedor de e-mail e logger com
+  redaction (T2).
+
 ## Testes
 
 - **Unit (Vitest)**: CSP, nonce, cabeçalhos estáticos, env (servidor e cliente), Proxy (nonce
@@ -225,15 +277,24 @@ reverse proxy) antes de expor o app.
 
 ### E2E
 
+O `pnpm e2e` sobe (ou usa) um PostgreSQL de teste (`scripts/with-local-postgres.sh` da raiz;
+no CI, um serviço), e `scripts/with-e2e-database.ts` cria um banco descartável, aplica as
+migrações com o runner de produção, define senhas aleatórias para `app_user` e `app_auth`,
+gera um `BETTER_AUTH_SECRET` aleatório e uma pasta de outbox, e apaga tudo ao sair. Os specs de
+autenticação leem o link de confirmação do outbox e mandam um `x-real-ip` único por teste (o
+rate limit conta por IP).
+
 O `webServer` do Playwright roda `next build && next start` em `127.0.0.1:3100` com
 `APP_ENV=e2e` e nunca reaproveita um servidor aberto (um `next dev` na porta teria outra CSP).
 Variáveis opcionais: `E2E_PORT`, `E2E_BASE_URL` (testa um ambiente já no ar; sem build local,
-a config tira o `runtime-env.spec.ts` de todos os projetos), `E2E_SKIP_BUILD=1` (reaproveita
-o build) e `E2E_CHROMIUM_EXECUTABLE_PATH`.
+a config tira o `runtime-env.spec.ts` e os specs de autenticação, que precisam do banco e do
+outbox locais, de todos os projetos), `E2E_SKIP_BUILD=1` (reaproveita o build) e
+`E2E_CHROMIUM_EXECUTABLE_PATH`.
 
 O que não se aplica a um projeto sai **pela config**, nunca por `test.skip` no corpo (o lint e
 a higiene da suíte reprovam): os specs que não dependem do dispositivo (`security-headers`,
-`console-guard`, `runtime-env`) ficam no `testIgnore` do `mobile`, e teste só de desktop leva
+`console-guard`, `runtime-env`, `auth-api`, `auth-isolation`) ficam no `testIgnore` do
+`mobile`, e teste só de desktop leva
 `{ tag: '@desktop-only' }`, que o `grepInvert` do `mobile` exclui. Confira o que roda em cada
 projeto com `pnpm --filter @salon/web exec playwright test --list`. Spec novo entra na tabela
 `SPEC_PROJECTS_LOCAL` de `src/test-hygiene.test.ts` no mesmo PR; sem isso, o unit reprova.
@@ -251,9 +312,8 @@ certo, é a referência.
 
 Documentados aqui, **não implementados** nesta iteração:
 
-- Better Auth (organizações = tenants, 2FA, passkeys) com autorização no DAL e nas actions;
-  o Proxy, no máximo, redireciona quem não tem cookie de sessão (conveniência, não segurança).
-- `server-only` nos módulos de dados e autenticação (sai do `package.json` enquanto não há uso).
+- MFA obrigatório (TOTP ou passkey, E1.2), reset de senha (E1.6), convites com o plugin
+  `organization` (E1.4), HIBP e Turnstile; provedor de e-mail para preview/production.
 - `assertSameOrigin` (Fetch Metadata + `Origin` + `Content-Type: application/json`) em todo
   Route Handler não-GET; `Cache-Control: no-store` nas páginas autenticadas;
   `Clear-Site-Data: "cache", "storage"` no logout.

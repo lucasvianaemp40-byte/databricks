@@ -330,14 +330,21 @@ type SpecProjects = Record<string, readonly string[]>;
 // efeito colateral de um testIgnore. Com build local, todo spec roda em algum projeto.
 const SPEC_PROJECTS_LOCAL: SpecProjects = {
   'a11y.spec.ts': ['chromium', 'mobile'],
+  'auth-api.spec.ts': ['chromium'],
+  'auth-flow.spec.ts': ['chromium', 'mobile'],
+  'auth-isolation.spec.ts': ['chromium'],
   'console-guard.spec.ts': ['chromium'],
   'home.spec.ts': ['chromium', 'mobile'],
   'runtime-env.spec.ts': ['chromium'],
   'security-headers.spec.ts': ['chromium'],
 };
-// Sem build local (E2E_BASE_URL) não há .next para o runtime-env subir outro `next start`.
+// Sem build local (E2E_BASE_URL) não há .next para o runtime-env subir outro `next start`, nem
+// outbox de e-mail e banco descartável para os de autenticação.
 const SPEC_PROJECTS_REMOTE: SpecProjects = {
   ...SPEC_PROJECTS_LOCAL,
+  'auth-api.spec.ts': [],
+  'auth-flow.spec.ts': [],
+  'auth-isolation.spec.ts': [],
   'runtime-env.spec.ts': [],
 };
 

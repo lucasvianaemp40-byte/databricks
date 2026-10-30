@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from 'next';
+import Link from 'next/link';
 import { connection } from 'next/server';
 import type { ReactNode } from 'react';
+import { BrandMark } from '../components/brand';
 import { env } from '../env';
 import './globals.css';
 
@@ -50,7 +52,13 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
         </a>
         <header className="border-zinc-200 border-b dark:border-zinc-800">
           <div className="mx-auto flex max-w-5xl items-center px-4 py-4 sm:px-6">
-            <span className="font-semibold text-lg tracking-tight">{PRODUCT_NAME}</span>
+            <Link
+              href="/"
+              className="flex items-center gap-2.5 rounded-lg font-semibold text-lg tracking-tight focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-rose-700"
+            >
+              <BrandMark className="size-8" />
+              {PRODUCT_NAME}
+            </Link>
           </div>
         </header>
         <main id="conteudo" tabIndex={-1} className="flex-1 focus:outline-none">

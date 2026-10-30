@@ -17,7 +17,11 @@
       "passThroughEnv": [
         "APP_ENV",
         "APP_URL",
-        "NEXT_TELEMETRY_DISABLED"
+        "NEXT_TELEMETRY_DISABLED",
+        "DATABASE_URL",
+        "DATABASE_URL_AUTH",
+        "BETTER_AUTH_SECRET",
+        "MAIL_OUTBOX_DIR"
       ]
     },
     "typecheck": {

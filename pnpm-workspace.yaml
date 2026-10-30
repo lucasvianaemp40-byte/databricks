@@ -74,11 +74,18 @@ catalogMode: prefer
 # Ao atualizar, respeite a quarentena: `npm view <pkg> time --json`.
 catalog:
   # --- runtime do app web ---
-  next: 16.4.0
+  # 16.4.3 (2026-10-23): corrige GHSA-2464-fhr4-w9xw e GHSA-673q-mjm6-r5xr (RCE, críticos) e
+  # GHSA-p3m5-59mp-jv5r (DoS em Server Actions), todos em <=16.4.0. Mesma versão do plugin.
+  next: 16.4.3
   react: 19.3.0
   react-dom: 19.3.0
   zod: 4.6.7
   '@t3-oss/env-nextjs': 0.13.11
+  # Autenticação (ADR-0004): 1.7.10 é a 1.7.x estável mais nova fora da quarentena em
+  # 2026-10-20 (1.7.11 saiu em 2026-10-19). better-auth e @better-auth/* andam juntos.
+  better-auth: 1.7.10
+  # Marca módulos só de servidor: importar no cliente quebra o build.
+  server-only: 0.0.1
   # --- domínio ---
   temporal-polyfill: 1.0.6
   # --- dados ---
@@ -111,7 +118,7 @@ catalog:
   '@eslint/js': 10.0.1
   typescript-eslint: 8.71.2
   eslint-plugin-security: 4.2.0
-  '@next/eslint-plugin-next': 16.4.0
+  '@next/eslint-plugin-next': 16.4.3
   eslint-plugin-react-hooks: 7.1.1
   globals: 17.13.0
   # --- monorepo e higiene ---

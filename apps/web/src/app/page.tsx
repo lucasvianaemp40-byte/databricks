@@ -1,5 +1,7 @@
 import type { AppointmentStatus } from '@salon/scheduling-core';
 import type { Metadata } from 'next';
+import Link from 'next/link';
+import { primaryButtonClasses, secondaryButtonClasses } from '../components/form-field';
 import { appointmentStatusLabel } from '../lib/appointment-status-labels';
 
 export const metadata: Metadata = {
@@ -58,7 +60,15 @@ export default function HomePage() {
           Seus clientes marcam horário sozinhos e sua equipe acompanha o dia em um só lugar, sem
           encaixes que se sobrepõem nem recados perdidos.
         </p>
-        <p className="mt-8 inline-flex rounded-full border border-zinc-300 px-4 py-1.5 text-sm text-zinc-700 dark:border-zinc-700 dark:text-zinc-300">
+        <div className="mt-10 flex flex-col gap-3 sm:flex-row">
+          <Link href="/cadastro" className={`${primaryButtonClasses} sm:w-auto sm:px-6`}>
+            Criar conta grátis
+          </Link>
+          <Link href="/entrar" className={`${secondaryButtonClasses} py-3 sm:px-6`}>
+            Já tenho conta
+          </Link>
+        </div>
+        <p className="mt-6 text-sm text-zinc-600 dark:text-zinc-400">
           Em desenvolvimento: lançamento em breve.
         </p>
       </section>

@@ -83,10 +83,18 @@ const hasLocalBuild = E2E_BASE_URL === undefined;
 // spec novo ou filtro novo (testIgnore, grep, grepInvert, shard, nos projetos ou na raiz)
 // reprova o unit até a tabela e os filtros mudarem no mesmo PR.
 
-/** Cabeçalhos HTTP, a fixture de console e o boot com outra config não dependem do dispositivo. */
-const DEVICE_INDEPENDENT_SPECS = /(?:security-headers|console-guard|runtime-env)\.spec\.ts$/;
-/** Sobe outro `next start` sobre o .next do webServer: sem build local não há o que testar. */
-const LOCAL_BUILD_SPECS = /runtime-env\.spec\.ts$/;
+/**
+ * Cabeçalhos HTTP, a fixture de console, o boot com outra config, a API de autenticação e o
+ * isolamento entre salões (servidor) não dependem do dispositivo.
+ */
+const DEVICE_INDEPENDENT_SPECS =
+  /(?:security-headers|console-guard|runtime-env|auth-api|auth-isolation)\.spec\.ts$/;
+/**
+ * Precisam do build local: o runtime-env sobe outro `next start` sobre o .next do webServer, e
+ * os de autenticação leem o outbox de e-mail e usam o banco descartável do `pnpm e2e`
+ * (scripts/with-e2e-database.ts). Contra E2E_BASE_URL não há outbox nem banco local.
+ */
+const LOCAL_BUILD_SPECS = /(?:runtime-env|auth-api|auth-flow|auth-isolation)\.spec\.ts$/;
 /**
  * Tag dos testes que só fazem sentido no desktop (ex.: navegação por Tab com teclado físico):
  * `test('…', { tag: '@desktop-only' }, …)`. O Playwright casa o grepInvert com
@@ -125,8 +133,11 @@ export default defineConfig({
       // Público majoritariamente Android: celular intermediário popular no Brasil.
       name: 'mobile',
       use: { ...devices['Galaxy A55'], launchOptions },
-      // Os specs independentes do dispositivo rodam uma vez, no projeto desktop.
-      testIgnore: DEVICE_INDEPENDENT_SPECS,
+      // Os specs independentes do dispositivo rodam uma vez, no projeto desktop; sem build
+      // local, os que dependem dele também saem daqui.
+      testIgnore: hasLocalBuild
+        ? DEVICE_INDEPENDENT_SPECS
+        : [DEVICE_INDEPENDENT_SPECS, LOCAL_BUILD_SPECS],
       grepInvert: DESKTOP_ONLY_TAG,
     },
   ],

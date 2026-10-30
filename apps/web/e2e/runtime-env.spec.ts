@@ -39,6 +39,8 @@ interface StartedServer {
 }
 
 function startProductionServer(webDir: string, port: number): StartedServer {
+  // Sem MAIL_OUTBOX_DIR: em produção o outbox de e-mail é recusado no boot (src/server/env.ts).
+  const { MAIL_OUTBOX_DIR: _outbox, ...inherited } = process.env;
   const child = spawn(
     process.execPath,
     [
@@ -52,7 +54,7 @@ function startProductionServer(webDir: string, port: number): StartedServer {
     {
       cwd: webDir,
       env: {
-        ...process.env,
+        ...inherited,
         APP_ENV: 'production',
         APP_URL: PRODUCTION_ORIGIN,
         NEXT_TELEMETRY_DISABLED: '1',
