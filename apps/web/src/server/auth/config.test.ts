@@ -78,6 +78,8 @@ describe('configuração do Better Auth', () => {
     expect(options.emailVerification.autoSignInAfterVerification).toBe(false);
     expect(options.emailVerification.expiresIn).toBeLessThanOrEqual(3600);
     expect(options.session.cookieCache.enabled).toBe(false);
+    // Identificador de verificação gravado com hash (ADR-0004), nunca o e-mail em claro.
+    expect(options.verification.storeIdentifier).toBe('hashed');
     expect(options.session.expiresIn).toBe(SESSION_MAX_AGE_SECONDS);
     expect(options.rateLimit).toMatchObject({ enabled: true, storage: 'database' });
     expect(options.rateLimit.customRules['/sign-in/email']).toEqual({ window: 60, max: 5 });

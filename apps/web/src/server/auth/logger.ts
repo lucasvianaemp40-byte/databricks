@@ -14,6 +14,9 @@ type LogLevel = 'debug' | 'info' | 'success' | 'warn' | 'error';
 const EMAIL = /[^\s@<>()"']+@[^\s@<>()"']+/g;
 // eslint-disable-next-line security/detect-unsafe-regex -- repetição fixa ({3}) de grupo com quantificador limitado: linear.
 const IPV4 = /\b\d{1,3}(?:\.\d{1,3}){3}\b/g;
+/** IPv6 (inclusive comprimido com `::`). Pode mascarar a mais (um horário 10:04:05): aceitável. */
+// eslint-disable-next-line security/detect-unsafe-regex -- grupos de tamanho limitado (≤ 4) e no máximo 7 repetições: linear.
+const IPV6 = /(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}/gi;
 /** Sequências longas sem espaço (tokens, JWTs, hashes). */
 const TOKEN = /[A-Za-z0-9_\-.]{32,}/g;
 
@@ -21,6 +24,7 @@ function redactAuthLog(message: string): string {
   return message
     .replaceAll(EMAIL, '[e-mail]')
     .replaceAll(IPV4, '[ip]')
+    .replaceAll(IPV6, '[ip]')
     .replaceAll(TOKEN, '[token]');
 }
 

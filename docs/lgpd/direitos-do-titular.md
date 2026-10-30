@@ -12,7 +12,11 @@ como [fundação].
   controlador e encaminha o pedido ao salão (art. 18, § 4º, I). O formulário do encarregado da
   plataforma roteia pelo tenant.
 - **Donos e equipe:** para dados de conta e de acesso, a controladora é a **plataforma**, que
-  responde diretamente.
+  responde diretamente. **Status real (2026-10-30):** não há ferramenta de exportação, correção
+  ou eliminação da conta. O atendimento seria **manual, por procedimento privilegiado** (o
+  `app_auth` não altera nem apaga organizações e vínculos, e `members` bloqueia a exclusão do
+  usuário por FK). Ferramenta pendente antes de ligar o cadastro em produção; o prazo e se o
+  processo manual basta são **a validar com jurídico**.
 
 ## 2. Prazos (art. 19)
 

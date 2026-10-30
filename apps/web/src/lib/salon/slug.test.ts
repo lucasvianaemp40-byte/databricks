@@ -54,6 +54,18 @@ describe('isUsableSalonSlug', () => {
     },
   );
 
+  it.each(['salao-11987654321', 'barbearia-12345678901', '12345678', 'unhas-12-345-678-0001-99'])(
+    'recusa sequência de 8 ou mais dígitos (CPF, CNPJ, telefone na URL pública): %s',
+    (slug) => {
+      expect(isUsableSalonSlug(slug)).toBe(false);
+    },
+  );
+
+  it('aceita números curtos (studio-21, salao-2024)', () => {
+    expect(isUsableSalonSlug('studio-21')).toBe(true);
+    expect(isUsableSalonSlug('salao-2024')).toBe(true);
+  });
+
   it('recusa cada slug reservado', () => {
     for (const slug of RESERVED_SLUGS) {
       expect(isUsableSalonSlug(slug), slug).toBe(false);

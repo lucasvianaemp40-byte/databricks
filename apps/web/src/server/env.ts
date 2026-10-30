@@ -80,6 +80,7 @@ export class ServerEnvError extends Error {
 }
 
 type ServerEnvName =
+  | 'NODE_ENV'
   | 'APP_ENV'
   | 'DATABASE_URL'
   | 'DATABASE_URL_AUTH'
@@ -89,6 +90,13 @@ type RuntimeServerEnv = Readonly<Partial<Record<ServerEnvName, string | undefine
 
 /** Valida um conjunto de variáveis (exportado para os testes; o app usa `serverEnv()`). */
 export function parseServerEnv(runtime: RuntimeServerEnv): ServerEnv {
+  // No servidor de produção, APP_ENV ausente cairia em `development` e desligaria o IP
+  // obrigatório e a recusa do outbox: precisa ser explícita.
+  if (runtime.NODE_ENV === 'production' && (runtime.APP_ENV ?? '') === '') {
+    throw new ServerEnvError(
+      'Variáveis de servidor inválidas (veja apps/web/.env.example):\n- APP_ENV: obrigatória no servidor de produção (production, preview ou e2e)',
+    );
+  }
   const result = schema.safeParse({
     APP_ENV: runtime.APP_ENV,
     DATABASE_URL: runtime.DATABASE_URL,
@@ -119,6 +127,7 @@ let cached: ServerEnv | undefined;
 /** Variáveis do servidor validadas uma vez por processo. Lança se faltar ou sobrar algo. */
 export function serverEnv(): ServerEnv {
   cached ??= parseServerEnv({
+    NODE_ENV: process.env.NODE_ENV,
     APP_ENV: process.env.APP_ENV,
     DATABASE_URL: process.env.DATABASE_URL,
     DATABASE_URL_AUTH: process.env.DATABASE_URL_AUTH,

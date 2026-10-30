@@ -42,7 +42,7 @@ export function SignInForm() {
   }
 
   return (
-    <form noValidate onSubmit={onSubmit} className="space-y-5" aria-label="Entrar">
+    <form method="post" noValidate onSubmit={onSubmit} className="space-y-5" aria-label="Entrar">
       <FormAlert message={message} />
       <FormField
         id="email"

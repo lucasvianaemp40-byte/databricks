@@ -62,8 +62,9 @@ export const authUsers = authSchema.table(
 
 /**
  * Sessão (o cookie `__Host-` guarda o token assinado). `ip_address` e `user_agent` servem à
- * segurança da conta (lista de sessões, alerta de acesso): dado pessoal, ver
- * docs/lgpd/inventario-de-dados.md.
+ * segurança da conta (lista de sessões e alerta de acesso são planejados, E1.7). Dado pessoal:
+ * ver docs/lgpd/inventario-de-dados.md. O app corta os dois nos limites dos CHECKs antes de
+ * gravar (`databaseHooks` em apps/web/src/server/auth/config.ts).
  */
 export const authSessions = authSchema.table(
   'sessions',
@@ -119,7 +120,10 @@ export const authAccounts = authSchema.table(
   ],
 );
 
-/** Valores de verificação de uso único (o identificador é gravado com hash). */
+/**
+ * Valores de verificação de uso único. O identificador é gravado com hash
+ * (`verification.storeIdentifier: 'hashed'` na configuração do Better Auth).
+ */
 export const authVerifications = authSchema.table(
   'verifications',
   {

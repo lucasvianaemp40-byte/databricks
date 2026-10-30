@@ -11,7 +11,7 @@ const HIGHLIGHTS = [
   },
   {
     title: 'Dados protegidos',
-    description: 'Cada salão isolado dos demais, conforme a LGPD.',
+    description: 'Os dados de cada salão ficam separados dos demais.',
   },
 ] as const;
 

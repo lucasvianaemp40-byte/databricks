@@ -62,6 +62,8 @@ describe('IP do cliente (x-real-ip)', () => {
     ['lista (proxy encadeado ou forjado)', '203.0.113.7, 10.0.0.1'],
     ['malformado', '999.1.1.1'],
     ['texto', 'localhost'],
+    ['IPv6 inválido', '::::'],
+    ['IPv6 com lixo', '2001:db8::zz'],
   ])('recusa %s', (_label, value) => {
     const headers = new Headers(value === undefined ? {} : { 'x-real-ip': value });
     expect(clientIp(headers)).toBeUndefined();

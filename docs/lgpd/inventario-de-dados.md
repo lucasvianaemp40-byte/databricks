@@ -1,8 +1,9 @@
 # Inventário de dados pessoais
 
 Inventário por tabela do schema `app` da fundação
-([`packages/db/drizzle/0002_schema.sql`](../../packages/db/drizzle/0002_schema.sql)), mais o que
-está planejado. Serve de base para o registro das operações (art. 37), a exportação, a
+([`packages/db/drizzle/0002_schema.sql`](../../packages/db/drizzle/0002_schema.sql)), do schema
+`auth` (login e cadastro, [`0005_auth_schema.sql`](../../packages/db/drizzle/0005_auth_schema.sql))
+e o que está planejado. Serve de base para o registro das operações (art. 37), a exportação, a
 anonimização e a retenção. **Atualize no mesmo PR que criar ou mudar uma coluna.** Bases legais
 e retenção são propostas **a validar com jurídico**
 ([papéis e bases](papeis-e-bases-legais.md), [retenção](retencao.md)).
@@ -126,11 +127,36 @@ com a eliminação. Como a tabela guarda só IDs e transições, a anonimizaçã
 `customers`) basta para desvincular a pessoa. A eliminação total de um tenant exige um
 procedimento privilegiado dedicado, ainda pendente (ver [retenção](retencao.md)).
 
+## Schema `auth` (login e cadastro, implementado)
+
+Dados de conta da **equipe do salão** (hoje, só o dono). Controladora: a **plataforma**.
+**Sem RLS** (o login acontece antes de existir tenant): acesso só pelo papel `app_auth`;
+`app_user` e `app_worker` não têm acesso nenhum ao schema, e o runner confere isso a cada deploy
+([ADR-0012](../adr/0012-papel-app-auth-e-provisionamento.md)). Bases legais propostas, **a
+validar com jurídico**: conta e vínculo, execução de contrato (art. 7º, V); IP, user-agent e
+rate limit, legítimo interesse e segurança (art. 7º, IX), com LIA pendente.
+
+| Tabela | Colunas com dado pessoal | Pessoal? | Observação |
+|---|---|---|---|
+| `users` | `name`, `email`, `email_verified` | Sim | `image` existe no formato do Better Auth, mas não é coletado (o cadastro recusa a chave) |
+| `sessions` | `token`, `ip_address`, `user_agent`, instantes | Sim | IP e navegador para segurança da conta; lista de sessões e alerta de acesso são **planejados** (E1.7). Sessão de 12 h; o logout apaga a linha |
+| `accounts` | `password` (hash scrypt) | Sim (credencial) | colunas de OAuth não usadas |
+| `verifications` | `identifier` (com hash), `value` | Indireto | sem uso nos fluxos ligados: a confirmação de e-mail é um JWT sem estado |
+| `rate_limits` | `key` = `<ip>\|<rota>` | Sim (IP) | inclusive de visitantes sem conta; IPv6 agrupado em /64; poda oportunista pela maior janela |
+| `organizations` | `name`, `slug` (duplicam `app.tenants`) | Talvez (MEI) | o endereço do salão recusa sequências de 8+ dígitos (CPF, CNPJ, telefone) |
+| `members` | vínculo pessoa x salão e papel | Sim | |
+
+Fora do banco, nesta iteração: o **outbox** de e-mail (só development/test/e2e, arquivos 0600
+numa pasta temporária) guarda nome, e-mail e o link de confirmação; o link leva o e-mail em
+claro dentro do JWT (risco aceito até o provedor de e-mail real, ver o
+[threat model](../seguranca/threat-models/2026-10-20-login-cadastro-onboarding.md)).
+
 ## Planejado (próximas iterações)
 
 | Armazenamento | Dados pessoais | Controlador | Observação |
 |---|---|---|---|
-| Schema `auth` (Better Auth): `user`, `session`, `account`, `verification`, `twoFactor`, `passkey`, `organization`, `member`, `invitation`, `rateLimit` | e-mail, nome, hash de senha, segredo TOTP cifrado, chaves públicas de passkey, IP e user agent das sessões, OTP temporário | Plataforma | papel `app_auth`; tokens de verificação com hash |
+| Schema `auth`: `two_factors`, `passkeys`, `invitations` e colunas de aceite dos termos e do aviso de privacidade | segredo TOTP cifrado, chaves públicas de passkey, e-mail do convidado, versões aceitas | Plataforma | papel `app_auth` |
+| Registro de acesso (append-only) | `user_id`, IP, instante, evento | Plataforma | guarda de 6 meses do Marco Civil, art. 15 (**a validar com jurídico** se o login é "registro de acesso"); o logout e a expiração apagam a sessão, então o registro precisa ser separado |
 | Consentimentos (append-only) | finalidade, concedido ou revogado, versão do texto, canal, evidência | Salão | `whatsapp_transactional`, `whatsapp_marketing`, `email_marketing`, `health_data`, `image_use` |
 | Ficha técnica e anamnese | **dado de saúde** | Salão | criptografia de campo; ver [dados sensíveis](dados-sensiveis.md) |
 | Fotos de antes e depois | imagem | Salão | bucket privado; consentimento específico para portfólio |
@@ -145,6 +171,7 @@ procedimento privilegiado dedicado, ainda pendente (ver [retenção](retencao.md
 
 | Onde | Dados | Regra |
 |---|---|---|
+| Logger do Better Auth (stdout, hoje) | nível e mensagem com e-mail, IPv4/IPv6 e tokens mascarados; nunca os argumentos | `apps/web/src/server/auth/logger.ts`; falha em `/api/auth` registra só rota, nome do erro e SQLSTATE |
 | Logs da aplicação (pino, Vercel) | IDs opacos, `requestId`; IP só em registro de acesso | redaction de telefone, e-mail, OTP, tokens e cookies (regra Semgrep `pii-in-logs`); nunca o erro cru do banco (`DrizzleQueryError` e `cause` trazem os parâmetros da consulta); IP por 6 meses ([ADR-0010](../adr/0010-observabilidade.md), aceito; implementação no T2) |
 | Sentry | erros | `sendDefaultPii: false`, `beforeSend` com redaction, túnel na mesma origem, região UE se possível ([ADR-0010](../adr/0010-observabilidade.md)) |
 | Upstash Redis | chaves de rate limit | usar `HMAC(segredo, telefone)` em vez do telefone, com TTL curto |

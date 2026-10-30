@@ -18,7 +18,11 @@ ainda.
 | `appointment_events` (auditoria) | junto com o tenant. A anonimização do cliente desvincula a pessoa | prova de operações; append-only |
 | Faturamento da assinatura do SaaS | 5 anos (**não verificado**; confirmar com o contador) | obrigação fiscal |
 | Pagamentos do sinal (Pix) | prazo fiscal do salão (confirmar com o contador) | obrigação fiscal do controlador |
-| OTP e tokens de verificação | minutos (TTL do OTP: 5 min) | — |
+| OTP e tokens de verificação | minutos (TTL do OTP: 5 min); link de confirmação de e-mail: 1 h | — |
+| Conta não confirmada (`auth.users` sem `email_verified`) | **proposta: 7 dias**, com o prazo citado no e-mail [não automatizado] | necessidade; evita ocupar o e-mail de outra pessoa |
+| Sessões (`auth.sessions`) | até expirar (12 h) ou o logout, que apagam a linha; job para as expiradas não lidas [não automatizado] | segurança da conta |
+| Contadores de rate limit (`auth.rate_limits`) | até a maior janela (1 h); poda oportunista do Better Auth, job pendente | prevenção a abuso |
+| Outbox de e-mail (só dev/test/e2e) | apagado ao fim de cada execução de E2E | técnico |
 | Chaves de idempotência | 24 h | técnico |
 | Eventos de webhook recebidos | 30 dias depois de processados | depuração e reconciliação |
 | Jobs concluídos do pg-boss | 7 dias | técnico |

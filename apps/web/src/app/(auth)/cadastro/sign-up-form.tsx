@@ -48,7 +48,13 @@ export function SignUpForm() {
   }
 
   return (
-    <form noValidate onSubmit={onSubmit} className="space-y-5" aria-label="Criar conta">
+    <form
+      method="post"
+      noValidate
+      onSubmit={onSubmit}
+      className="space-y-5"
+      aria-label="Criar conta"
+    >
       <FormAlert message={message} />
       <FormField
         id="name"
@@ -87,7 +93,8 @@ export function SignUpForm() {
         {pending ? 'Criando conta…' : 'Criar conta'}
       </button>
       <p className="text-xs text-zinc-600 dark:text-zinc-400">
-        Usamos seu nome e e-mail só para a sua conta e para avisos de segurança.
+        Usamos seu nome e e-mail para criar e proteger a sua conta. Por segurança, registramos o IP
+        e o navegador de cada acesso.
       </p>
     </form>
   );

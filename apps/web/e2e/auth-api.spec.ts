@@ -1,4 +1,4 @@
-import { messagesTo, PASSWORD, uniqueEmail, uniqueIp } from './support/auth';
+import { createVerifiedAccount, messagesTo, PASSWORD, uniqueEmail, uniqueIp } from './support/auth';
 import { expect, test } from './support/fixtures';
 
 /** Chaves (recursivas) de um JSON, para comparar o formato de duas respostas. */
@@ -129,6 +129,18 @@ test.describe('API de autenticação (/api/auth)', () => {
     const blocked = await attempt(ip);
     expect(blocked.status()).toBe(429);
     expect((await attempt(uniqueIp())).status()).toBe(401);
+  });
+
+  test('User-Agent gigante não derruba o login (é truncado antes de gravar a sessão)', async ({
+    request,
+  }) => {
+    const ip = uniqueIp();
+    const { email } = await createVerifiedAccount(request, { ip });
+    const response = await request.post('/api/auth/sign-in/email', {
+      data: { email, password: PASSWORD },
+      headers: { 'x-real-ip': ip, 'user-agent': `Navegador/${'a'.repeat(3000)}` },
+    });
+    expect(response.status()).toBe(200);
   });
 
   test('respostas de autenticação não ficam em cache nem vazam o link em Referer', async ({

@@ -153,6 +153,8 @@ export function createAuth(deps: AuthDependencies) {
         await deps.mailer.send({ to: user.email, ...verificationEmail({ name: user.name, url }) });
       },
     },
+    // Identificador de verificação gravado com hash (ADR-0004): nada de e-mail em claro ali.
+    verification: { storeIdentifier: 'hashed' },
     session: {
       expiresIn: SESSION_MAX_AGE_SECONDS,
       updateAge: SESSION_MAX_AGE_SECONDS,
@@ -177,6 +179,21 @@ export function createAuth(deps: AuthDependencies) {
       ipAddress: { ipAddressHeaders: [CLIENT_IP_HEADER] },
     },
     databaseHooks: {
+      session: {
+        create: {
+          // O Better Auth grava o User-Agent e o IP sem cortar: valor gigante violaria o
+          // CHECK do banco e derrubaria o login com 500. Corta nos limites do schema.
+          before(session) {
+            return Promise.resolve({
+              data: {
+                ...session,
+                userAgent: session.userAgent?.slice(0, 1024) ?? null,
+                ipAddress: session.ipAddress?.slice(0, 64) ?? null,
+              },
+            });
+          },
+        },
+      },
       user: {
         create: {
           // Segunda camada: o nome já passou pelo hook `before`.

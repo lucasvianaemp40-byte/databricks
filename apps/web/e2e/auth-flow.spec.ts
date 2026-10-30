@@ -141,6 +141,25 @@ test.describe('conta, salão e painel', () => {
     }
   });
 
+  test.describe('sem JavaScript (antes da hidratação)', () => {
+    test.use({ javaScriptEnabled: false });
+
+    test('enviar os formulários nunca põe a senha na URL', async ({ page }) => {
+      for (const path of ['/entrar', '/cadastro']) {
+        await page.goto(path);
+        if (path === '/cadastro') {
+          await page.getByLabel('Seu nome').fill('Ana');
+        }
+        await page.getByLabel('E-mail').fill(uniqueEmail());
+        await page.getByLabel('Senha').fill('SenhaSecretaDemais123');
+        await page.getByLabel('Senha').press('Enter');
+        await page.waitForLoadState();
+        expect(page.url(), path).not.toContain('Secreta');
+        expect(page.url(), path).not.toContain('password');
+      }
+    });
+  });
+
   test('sem sessão, o painel e a criação do salão levam ao login', async ({ page }) => {
     for (const path of ['/app', '/app/criar-salao']) {
       await page.goto(path);

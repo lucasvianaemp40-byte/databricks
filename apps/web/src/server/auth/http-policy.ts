@@ -1,3 +1,5 @@
+import { isIP } from 'node:net';
+
 /**
  * Política HTTP das rotas `/api/auth/*` (threat model LC-02, LC-08, LC-11). Módulo puro,
  * testado sem servidor.
@@ -39,23 +41,13 @@ export function isAllowedAuthRoute(method: string, url: URL): boolean {
 
 export const CLIENT_IP_HEADER = 'x-real-ip';
 
-const IPV6 = /^[0-9a-f:]{2,39}$/i;
-const IPV4_OCTET = /^(?:0|[1-9]\d{0,2})$/;
-
-function isIpv4(value: string): boolean {
-  const octets = value.split('.');
-  return (
-    octets.length === 4 && octets.every((octet) => IPV4_OCTET.test(octet) && Number(octet) <= 255)
-  );
-}
-
 /** O único IP de `x-real-ip`, ou `undefined` se ausente, múltiplo ou malformado. */
 export function clientIp(headers: Headers): string | undefined {
   const value = headers.get(CLIENT_IP_HEADER)?.trim();
   if (value === undefined || value === '' || value.includes(',')) {
     return undefined;
   }
-  return isIpv4(value) || (IPV6.test(value) && value.includes(':')) ? value : undefined;
+  return isIP(value) === 0 ? undefined : value;
 }
 
 /** Ambientes publicados: exigem o IP da borda (fail-closed). */

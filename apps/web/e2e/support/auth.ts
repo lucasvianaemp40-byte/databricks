@@ -100,10 +100,12 @@ export async function createSalonThroughUi(
 ): Promise<void> {
   await expect(page).toHaveURL(/\/app\/criar-salao$/);
   await page.getByLabel('Nome do salão').fill(salon.name);
-  // Endereço único por teste (o slug é global).
+  // Endereço único por teste (o slug é global). Letras entre os grupos: o app recusa 8+
+  // dígitos seguidos (CPF, telefone), e um trecho de UUID pode sair só com dígitos.
+  const id = randomUUID();
   await page
     .getByLabel('Endereço da página de agendamento')
-    .fill(`salao-${randomUUID().slice(0, 8)}`);
+    .fill(`salao-${id.slice(0, 4)}x${id.slice(4, 8)}y${id.slice(9, 13)}`);
   await page.getByLabel('Nome da unidade').fill(salon.location ?? 'Unidade Centro');
   await page
     .getByLabel('Fuso horário da unidade')

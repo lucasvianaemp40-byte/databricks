@@ -16,6 +16,15 @@ describe('logger do Better Auth sem dado pessoal', () => {
     );
   });
 
+  it('mascara IPv6 (x-real-ip aceita IPv6)', () => {
+    const line = formatAuthLog(
+      'warn',
+      'Rate limit para 2001:db8:85a3::8a2e:370:7334 e fe80::1',
+      [],
+    );
+    expect(line).toBe('[auth] warn: Rate limit para [ip] e [ip]');
+  });
+
   it('não imprime argumentos extras: só o nome do erro e o SQLSTATE', () => {
     const driverError = Object.assign(new Error('duplicate key'), {
       code: '23505',

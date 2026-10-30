@@ -84,7 +84,18 @@ export function slugify(text: string): string {
   return base.slice(0, SLUG_MAX_LENGTH).replaceAll(EDGE_HYPHENS, '');
 }
 
-/** Formato do banco, mínimo de 3 caracteres e fora da lista de reservados. */
+/**
+ * 8 ou mais dígitos, ignorando hífens: CPF, CNPJ ou telefone viraria URL pública (LGPD,
+ * minimização; docs/lgpd/inventario-de-dados.md).
+ */
+const LONG_DIGIT_RUN = /\d{8,}/;
+
+/** Formato do banco, mínimo de 3 caracteres, sem documento/telefone e fora dos reservados. */
 export function isUsableSalonSlug(slug: string): boolean {
-  return slug.length >= SLUG_MIN_LENGTH && SLUG_REGEX.test(slug) && !RESERVED_SLUGS.has(slug);
+  return (
+    slug.length >= SLUG_MIN_LENGTH &&
+    SLUG_REGEX.test(slug) &&
+    !RESERVED_SLUGS.has(slug) &&
+    !LONG_DIGIT_RUN.test(slug.replaceAll('-', ''))
+  );
 }

@@ -81,6 +81,14 @@ describe('parseServerEnv', () => {
     expect(issues({ ...VALID, MAIL_OUTBOX_DIR: 'relativo/outbox' })).toContain('MAIL_OUTBOX_DIR:');
   });
 
+  it('em produção (NODE_ENV=production), APP_ENV é obrigatória: nada de cair em development', () => {
+    expect(issues({ ...VALID, APP_ENV: undefined, NODE_ENV: 'production' })).toContain('APP_ENV:');
+    expect(parseServerEnv({ ...VALID, APP_ENV: 'e2e', NODE_ENV: 'production' }).appEnv).toBe('e2e');
+    expect(parseServerEnv({ ...VALID, APP_ENV: undefined, NODE_ENV: 'development' }).appEnv).toBe(
+      'development',
+    );
+  });
+
   it('trata string vazia como ausente', () => {
     expect(parseServerEnv({ ...VALID, MAIL_OUTBOX_DIR: '' }).mailOutboxDir).toBeUndefined();
   });

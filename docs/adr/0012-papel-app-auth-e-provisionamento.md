@@ -66,6 +66,12 @@ pesaram:
     executar SQL como `app_auth` já domina o schema `auth` inteiro. Fica registrado como
     pendência: trocar os GRANTs de INSERT por uma função `SECURITY DEFINER` dedicada (entrando
     em `executable_definers`);
+  - quem conseguir executar SQL arbitrário como `app_auth` (bug ou injeção no caminho de login)
+    também consegue gravar um vínculo `owner` num salão existente, ou uma organização para um
+    tenant que ainda não tem (pentest de 2026-10-30, PoC fora do repositório). Com a mesma
+    pré-condição ele já troca o hash de senha do dono em `auth.accounts`, então um trigger extra
+    quase não reduz o risco; a correção é a mesma da LC-22 (função de provisionamento
+    `SECURITY DEFINER` e REVOKE dos INSERTs diretos);
   - o `app_user` ainda tem INSERT e UPDATE em `app.tenants` (da 0003): um UPDATE de `slug`
     pelo app desalinharia `auth.organizations.slug`. Nenhum código faz isso hoje; a revisão do
     GRANT entra com a tela de configurações do salão.

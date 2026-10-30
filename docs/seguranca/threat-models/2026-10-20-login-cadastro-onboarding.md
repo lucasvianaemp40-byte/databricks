@@ -47,7 +47,18 @@ Este resumo registra o que entrou nesta iteração, com o teste que fecha cada a
 | LC-24 | slug com o padrão do CHECK, mínimo de 3, lista de reservados e meta-teste das rotas de topo | unit `slug` |
 | LC-30–LC-32 | DAL: sessão → vínculo (`app_auth`) → `withTenant(app_user)`; nega em erro | unit `tenant-context`; E2E `auth-isolation` |
 
-**Pendente (risco aceito na seção 9, até antes de qualquer cadastro em produção):** MFA
+Depois das revisões de AppSec, pentest e LGPD (2026-10-30), também entraram: `method="post"`
+nos formulários de acesso (sem JS, a senha não vai para a URL; E2E sem JavaScript), corte de
+`User-Agent`/IP antes de gravar a sessão (E2E com User-Agent de 3000 caracteres), IP validado
+com `net.isIP`, `APP_ENV` obrigatória no servidor de produção, identificador de verificação com
+hash, slug que recusa 8+ dígitos (CPF, CNPJ, telefone) e IPv6 mascarado no log.
+
+**Pendente (risco aceito na seção 9, até antes de qualquer cadastro em produção):** ocupação
+de e-mail por conta não confirmada e o resíduo da LC-06 (quem cadastra o e-mail alheio pode
+fazer a vítima confirmar a conta dele pelo link reenviado no login; a vítima não ganha sessão,
+mas o e-mail fica preso), que fecham com o reset de senha (E1.6) e a purga de contas não
+confirmadas (proposta: 7 dias, [retenção](../../lgpd/retencao.md)); escrita de vínculo ou
+organização por quem já tem SQL arbitrário como `app_auth` (ver ADR-0012); MFA
 (E1.2), HIBP, Turnstile, reset de senha (E1.6), provedor de e-mail, logger com redaction (T2),
 teto absoluto e inatividade por papel (LC-33; hoje a sessão vale 12 h fixas), troca dos GRANTs
 de INSERT do `app_auth` por função `SECURITY DEFINER` (LC-22) e verificação de que a Vercel
