@@ -62,21 +62,21 @@ flowchart LR
 
 | ID | STRIDE/LINDDUN | Cenário | Risco | Mitigação | Teste que prova | Status |
 |---|---|---|---|---|---|---|
-| A1 | E (todas) | Esta entrega ir para produção sem MFA, verificação de e-mail, HIBP e rate limit em banco | A | Trava de produção: o módulo de autenticação recusa `APP_ENV=production` até a 2ª entrega | unidade: config de auth lança com `APP_ENV=production` | a implementar |
-| A2 | S | Força bruta / credential stuffing no login | A | rate limit do Better Auth (memória, ligado com `NODE_ENV=production`) agora; banco + Turnstile + HIBP na 2ª entrega; senha 12–128 | unidade (política de senha); A1 bloqueia produção | parcial |
-| A3 | S | Sequestro ou fixação de sessão | A | cookie `__Host-`, `HttpOnly`, `Secure`, `SameSite=Lax`, sem `Domain`; `cookieCache` desligado; sessão nova a cada login | E2E confere todo `Set-Cookie` | a implementar |
-| A4 | T | CSRF no login, cadastro, saída ou criação do salão | A | Server Actions: checagem nativa de `Origin` do Next; `/api/auth/*`: checagem de origem do Better Auth (`trustedOrigins` = `APP_URL`), nunca `disableCSRFCheck`/`disableOriginCheck` | unidade: config sem `disable*`; E2E: POST com `Origin` estranho recusado | a implementar |
-| A5 | E / I | Dono do salão A abre o painel do salão B (troca de organização ativa, id na URL, cookie de outra pessoa) | A | `tenant_id` só da sessão; o DAL confere `auth.member` (usuário × organização) a cada requisição antes do `withTenant`; nenhuma rota recebe tenant por parâmetro; RLS como 2ª camada | integração: `requireTenant` recusa organização da qual o usuário não é membro; E2E: dono B não vê o salão A | a implementar |
-| A6 | E | Usuário sem salão acessa o painel; usuário com salão cria um 2º salão por replay da action | M | painel exige membro; criação recusa quem já é membro (1 salão por conta nesta entrega) | E2E + integração | a implementar |
-| A7 | T | Criação do salão pela metade (organização criada, tenant não) | M | criação idempotente: a action retoma a partir da organização existente; `app.tenants` com o mesmo id (`ON CONFLICT DO NOTHING`) | integração: 2ª chamada completa o que faltou | a implementar |
-| A8 | I | Enumeração de e-mail pelo cadastro ("já existe") ou pelo login | M | mensagem genérica nos dois; a diferença de comportamento some com a verificação de e-mail (2ª entrega); A1 bloqueia produção | unidade: mapeamento de erros genérico | parcial |
-| A9 | I | Slug do salão revela dado pessoal (telefone, CPF) ou colide com rota do sistema | M | slug validado (`^[a-z0-9-]`), sem sequência longa de dígitos, lista de slugs reservados | unidade | a implementar |
-| A10 | T | Entrada malformada nas actions (campos extras, tipos, tamanhos) | M | zod `.strict()`, limites de tamanho iguais aos CHECKs do banco; fuso só da lista dos 16 do Brasil validada pelo core | unidade | a implementar |
-| A11 | I | Erro do banco ou do Better Auth vaza stack, SQL ou e-mail | M | actions devolvem mensagens fixas; nada de `error.message` para o cliente; nada de PII em log | unidade + E2E (corpo da resposta) | a implementar |
-| A12 | E | Papel `app_auth` vira caminho para dado de tenant, ou `app_user` lê credenciais | A | `app_auth` só tem privilégio no schema `auth`; `app_user`/`app_worker` não têm nenhum em `auth`; invariantes do deploy cobrem `app_auth` (atributos, posse e privilégios) | integração (catálogo e invariantes) | a implementar |
-| A13 | D | Cadastro em massa (custo do scrypt, lixo no banco) | M | rate limit do Better Auth; Turnstile na 2ª entrega | A1 | parcial |
-| L1 | LINDDUN: Identifiability / Non-compliance | Nome e e-mail do dono em log ou URL | M | nada de PII em log, URL ou mensagem de erro; formulários por POST | revisão `lgpd-check` | a implementar |
-| L2 | LINDDUN: Data disclosure | Senha ou hash exposto | A | hash scrypt do Better Auth, coluna só acessível ao `app_auth`; senha nunca logada nem devolvida | integração (privilégios) | a implementar |
+| A1 | E (todas) | Esta entrega ir para produção sem MFA, verificação de e-mail, HIBP e limite em banco, inclusive por esquecer `APP_ENV` no deploy | A | Trava de produção: `assertAuthAllowed` libera só `APP_ENV` da lista fechada (`development`, `test`, `e2e`, `preview`) e, sem `APP_ENV`, só fora de `NODE_ENV=production` | unidade (`config.test.ts`: produção, sem APP_ENV em build de produção, valor desconhecido) | implementado |
+| A2 | S | Força bruta / credential stuffing no login | A | O limitador do Better Auth só roda no roteador HTTP e as actions chamam a API direto: limite próprio em memória (por e-mail 10/15 min, por IP 30/15 min, recusada conta), senha 12–128; limite em banco, Turnstile e HIBP na 2ª entrega | unidade (`rate-limit.test.ts`); E2E: 11ª tentativa no mesmo e-mail, mesmo com a senha certa, pede para esperar | parcial (por processo; IP só confiável atrás de proxy que sobrescreve o cabeçalho) |
+| A3 | S | Sequestro ou fixação de sessão | A | cookie `__Host-salao.*`, `HttpOnly`, `Secure`, `SameSite=Lax`, sem `Domain`; `cookieCache` desligado; sessão nova a cada login | E2E confere todo `Set-Cookie`; unidade da config | implementado |
+| A4 | T | CSRF no login, cadastro, saída ou criação do salão | A | Sem rota `/api/auth` (Better Auth só por Server Actions); checagem nativa de `Origin` das Server Actions; `trustedOrigins` = `APP_URL`; nunca `disableCSRFCheck`/`disableOriginCheck` | unidade: config sem `disable*`; E2E de POST com `Origin` estranho **não feito** (proteção nativa do Next) | implementado (sem E2E dedicado) |
+| A5 | E / I | Dono do salão A abre o painel do salão B (troca de organização ativa, id na URL, cookie de outra pessoa) | A | `tenant_id` só da sessão; o DAL confere `auth.member` a cada requisição (`getActiveMember`) antes do `withTenant`; nenhuma rota recebe tenant por parâmetro; RLS como 2ª camada | integração: resumo do salão B não traz A; E2E: dois donos, cada um só vê o seu | implementado |
+| A6 | E | Usuário sem salão acessa o painel; reenvio da action de criação (o id está no bundle) recria salão ou acrescenta unidade; membro não-dono retoma a criação | M | painel exige membro; a action redireciona quem já tem salão completo, só o `owner` retoma, e o banco só aceita a PRIMEIRA unidade na criação (`TenantOnboardingConflictError`); um salão por conta (`organizationLimit: 1`, único em `member`) | integração (reenvio com outra unidade recusado; único de membro); E2E sem sessão vai ao login | implementado |
+| A7 | T | Criação do salão pela metade (organização criada, tenant não) | M | criação idempotente: a action retoma a partir da organização existente; `app.tenants` com o mesmo id | integração: repetir com os mesmos dados devolve os mesmos ids | implementado |
+| A8 | I | Enumeração de e-mail pelo cadastro ("já existe") ou pelo login | M | mensagem fixa nos dois; o login faz hash mesmo sem usuário; a diferença de comportamento no cadastro some com a verificação de e-mail (2ª entrega); A1 bloqueia produção | unidade (`messages.test.ts`); E2E: mesma mensagem para e-mail inexistente e senha errada | parcial (cadastro) |
+| A9 | I | Slug do salão revela dado pessoal (telefone, CPF) ou colide com rota do sistema | M | slug validado (`^[a-z0-9-]`, 3–63), sem 8+ dígitos seguidos, lista de reservados (rotas do app e arquivos do Next) | unidade (`validation.test.ts`) | implementado |
+| A10 | T | Entrada malformada nas actions (campos extras, tipos, tamanhos) | M | zod `.strict()` sobre só os campos esperados do FormData; limites iguais aos CHECKs; fuso só da lista dos 16 do Brasil | unidade | implementado |
+| A11 | I | Erro do banco ou do Better Auth vaza stack, SQL ou e-mail | M | actions devolvem mensagens fixas; nada de `error.message` para o cliente; senha nunca reexibida; sem log com PII | unidade (`messages.test.ts`, `form-state.test.ts`) | implementado |
+| A12 | E | Papel `app_auth` vira caminho para dado de tenant, ou `app_user` lê credenciais | A | `app_auth` só no schema `auth` (inclusive USAGE de schema) e com `search_path=auth` no papel; `app_user`/`app_worker` sem nada em `auth`; invariantes de deploy cobrem atributos, posse, privilégios e USAGE | integração: catálogo, 42501 de ponta a ponta, 10 sabotagens recusadas pelas invariantes | implementado |
+| A13 | D | Cadastro em massa (custo do scrypt, lixo no banco) | M | limite próprio por IP (30 por hora); Turnstile e limite em banco na 2ª entrega | unidade (`rate-limit.test.ts`) | parcial |
+| L1 | LINDDUN: Identifiability / Non-compliance | Nome e e-mail do dono em log ou URL | M | nada de PII em log, URL ou mensagem de erro; formulários por POST; sessão sem IP | revisão AppSec (sem log com PII; o aviso de e-mail existente do Better Auth é `info`, abaixo do nível padrão) | implementado |
+| L2 | LINDDUN: Data disclosure | Senha ou hash exposto | A | hash scrypt do Better Auth, coluna só acessível ao `app_auth`; senha nunca logada nem devolvida | integração (privilégios e 42501) | implementado |
 
 ## 4. ASVS 5.0 L2
 
@@ -92,6 +92,16 @@ flowchart LR
 - **Suposição:** só o dono cria conta nesta entrega; a equipe entra por convite (E1.4).
 - **Risco aceito (dono: mantenedor):** sem MFA, sem verificação de e-mail e sem HIBP até a
   2ª entrega. Só vale porque A1 impede produção; em `preview` não há dados reais.
+- **Risco aceito (dono: mantenedor):** `auth.session.token` em texto puro (formato do Better
+  Auth): quem lê o banco como `app_auth` sequestra sessões. Mitigado pelo isolamento do papel;
+  expurgo das vencidas é pendência.
+- **Risco aceito até a 2ª entrega:** o limite de tentativas é por processo e o limite por IP
+  depende de um proxy que sobrescreva `x-real-ip`/`x-forwarded-for`; sem ele, só o limite por
+  e-mail vale.
+- **Não verificado:** a checagem de `Origin` das Server Actions atrás do proxy da hospedagem
+  (`X-Forwarded-Host`); conflito do schema `auth` com a Data API do Neon (`pg_session_jwt`).
+- **Revisões feitas:** AppSec (3 achados, corrigidos com teste), migrações (aprovado com
+  ressalvas, tratadas), LGPD (pendências no [inventário](../../lgpd/inventario-de-dados.md#schema-auth-better-auth-1ª-entrega-do-adr-0004)).
 - **Decisão:** o `app_user` não recebe `SELECT` em `auth.member`/`auth.organization`
   (diferente do ADR-0004). O DAL resolve o membro pela conexão `app_auth`, o que dá ao
   `app_user` menos privilégio.

@@ -42,8 +42,8 @@ Detalhes em [headers-e-csp.md](headers-e-csp.md).
 
 | ID | Nível | Requisito (resumo) | Como atendemos | Status |
 |---|---|---|---|---|
-| 3.3.1 / 3.3.2 / 3.3.4 | L1 | Cookies `Secure`, `SameSite` adequado e `HttpOnly` | Sem cookies na fundação. Better Auth com `Secure`, `HttpOnly` e `SameSite=Lax` | Planejado |
-| 3.3.3 | L2 | Prefixo `__Host-` | Configuração do Better Auth com `cookiePrefix: "__Host-…"` + E2E que confere todo `Set-Cookie` | Planejado |
+| 3.3.1 / 3.3.2 / 3.3.4 | L1 | Cookies `Secure`, `SameSite` adequado e `HttpOnly` | Cookies do Better Auth com `Secure`, `HttpOnly` e `SameSite=Lax`; E2E confere todo `Set-Cookie` ([threat model](threat-models/2026-10-30-conta-e-salao.md)) | Atendido |
+| 3.3.3 | L2 | Prefixo `__Host-` | `cookiePrefix: "__Host-salao"`, `useSecureCookies: false` e `secure: true`, `Path=/`, sem `Domain`; E2E confere todo `Set-Cookie` | Atendido |
 | 3.4.1 | L1/L2 | HSTS ≥ 1 ano; L2 exige `includeSubDomains` | `max-age=63072000; includeSubDomains` no build de produção. Sem `preload` até existir o domínio definitivo | Atendido |
 | 3.4.3 | L2 | CSP com `object-src 'none'`, `base-uri 'none'` e nonce, hash ou allowlist | Nonce de 128 bits por requisição, `strict-dynamic`, `object-src 'none'`, `base-uri 'none'` (o exemplo do Next usa `'self'`). O matcher do Proxy cobre todo documento HTML, inclusive 404, `/_next/*` e prefetch (E2E "cobertura do Proxy") | Atendido |
 | 3.4.4 | L2 | `X-Content-Type-Options: nosniff` | Cabeçalho estático | Atendido |
@@ -71,11 +71,11 @@ Tudo planejado para a próxima iteração ([ADR-0004](../adr/0004-autenticacao-b
 
 | ID | Nível | Requisito (resumo) | Como vamos atender | Status |
 |---|---|---|---|---|
-| 6.1.1 | L1 | Documentar rate limit e anti-automação contra credential stuffing sem lockout malicioso | Throttling progressivo por conta e IP; lockout só no segundo fator | Planejado |
+| 6.1.1 | L1 | Documentar rate limit e anti-automação contra credential stuffing sem lockout malicioso | Hoje: limite provisório em memória nas actions (login por e-mail e por IP, cadastro por IP; sem lockout de conta). Throttling progressivo em banco, Turnstile: 2ª entrega | Parcial |
 | 6.1.3 / 6.3.4 | L2 | Todos os caminhos de autenticação documentados e com força consistente | Equipe: só e-mail + senha + TOTP ou passkey. Sem magic link, e-mail OTP ou social para a equipe | Planejado |
-| 6.2.1 / 6.2.9 | L1 | Senha ≥ 8 (15 recomendado); aceitar ≥ 64 | Mínimo 12, máximo 128 | Planejado |
+| 6.2.1 / 6.2.9 | L1 | Senha ≥ 8 (15 recomendado); aceitar ≥ 64 | Mínimo 12, máximo 128 (zod e Better Auth), sem aparar espaços | Atendido |
 | 6.2.4 / 6.2.12 | L1/L2 | Bloquear senhas comuns e vazadas | Plugin `haveIBeenPwned` (k-anonymity) | Planejado |
-| 6.2.5 / 6.2.7 | L1 | Sem regras de composição; permitir colar e gerenciador | UI sem regras de composição; `autocomplete` correto | Planejado |
+| 6.2.5 / 6.2.7 | L1 | Sem regras de composição; permitir colar e gerenciador | UI sem regras de composição; `autocomplete` `new-password`/`current-password` | Atendido |
 | 6.2.11 | L2 | Bloquear palavras do contexto | Nome do salão, slug, "salao", "barbearia" e nome do produto | Planejado |
 | 6.3.3 | L2 | MFA obrigatório | Equipe: TOTP ou passkey com verificação do usuário, aplicado no DAL. **Cliente final: desvio** | Planejado / Desvio aceito |
 | 6.4.3 | L2 | Reset de senha não contorna MFA | O reset não cria sessão; o login seguinte passa pelo segundo fator; `revokeSessionsOnPasswordReset` | Planejado |
@@ -92,8 +92,8 @@ Tudo planejado para a próxima iteração ([ADR-0004](../adr/0004-autenticacao-b
 |---|---|---|---|---|
 | 7.1.1 / 7.3.1 / 7.3.2 | L2 | Inatividade e tempo de vida absoluto definidos e aplicados | Por papel, checado no DAL: equipe 12 h / 7 dias; profissional 12 h / 30 dias; cliente 30 / 90 dias | Planejado |
 | 7.1.2 | L2 | Política de sessões concorrentes | Até 5 sessões por membro da equipe; tela "Dispositivos" | Planejado |
-| 7.2.1–7.2.4 | L1 | Verificação no backend; token CSPRNG ≥ 128 bits; token novo no login | Sessão opaca no banco; `cookieCache` desligado | Planejado |
-| 7.4.1 / 7.4.2 | L1 | Logout invalida no servidor; desativar conta encerra sessões | Revogar sessões ao remover membro (hook da organização) | Planejado |
+| 7.2.1–7.2.4 | L1 | Verificação no backend; token CSPRNG ≥ 128 bits; token novo no login | Sessão opaca no banco, conferida pelo DAL a cada requisição; `cookieCache` desligado; sessão nova a cada login | Atendido |
+| 7.4.1 / 7.4.2 | L1 | Logout invalida no servidor; desativar conta encerra sessões | Logout apaga a sessão no banco (E2E: depois de sair, o painel volta ao login). Revogar sessões ao remover membro: E1.5 | Parcial |
 | 7.4.3 / 7.5.2 | L2 | Encerrar outras sessões depois de trocar fator; usuário vê suas sessões | Tela "Dispositivos" | Planejado |
 | 7.4.5 | L2 | Admin encerra sessões de um usuário | Dono revoga sessões de membros do tenant | Planejado |
 | 7.5.1 | L2 | Reautenticação antes de mudar e-mail, telefone ou MFA | `freshAge` de 10 min (step-up) | Planejado |
@@ -104,9 +104,9 @@ Tudo planejado para a próxima iteração ([ADR-0004](../adr/0004-autenticacao-b
 |---|---|---|---|---|
 | 8.1.1 / 8.1.2 | L1/L2 | Regras de autorização documentadas por função, dado e campo | Matriz papel × rota/action × tenant, que gera testes (meta-teste "toda rota tem entrada") | Planejado |
 | 8.2.1 | L1 | Autorização por função | Clientes `tenantAction` e `ownerAction` do `next-safe-action` | Planejado |
-| 8.2.2 | L1 | Autorização por dado (IDOR/BOLA) | **Banco:** RLS `FORCE` + FKs compostas, testadas. **App:** 404 para recurso de outro tenant | Parcial (camada de banco atendida) |
+| 8.2.2 | L1 | Autorização por dado (IDOR/BOLA) | **Banco:** RLS `FORCE` + FKs compostas, testadas. **App:** tenant só da sessão, membro conferido a cada requisição (DAL); E2E com dois donos | Parcial (falta a matriz de autorização do E1.9) |
 | 8.2.3 | L2 | Autorização por campo (BOPLA) | DTOs por papel; anamnese só para papéis autorizados | Planejado |
-| 8.3.1 | L1 | Autorização em camada confiável | Decisão registrada: o Proxy não autoriza; cada action e handler reautoriza. Ainda não há rota autenticada | Planejado |
+| 8.3.1 | L1 | Autorização em camada confiável | O Proxy não autoriza; cada action e página autenticada passa pelo DAL (`requireUser`/`requireTenant`) | Atendido |
 | 8.4.1 | L2 | Controles cross-tenant em aplicação multi-tenant | RLS `ENABLE` + `FORCE`, política RESTRICTIVE, papéis sem BYPASSRLS, invariantes no deploy, `*.rls.test.ts` e meta-testes. DAL e matriz HTTP pendentes | Parcial (banco atendido) |
 | 8.4.2 | L3 | Controles de acesso administrativo (suporte) | Acesso do suporte só com janela concedida pelo dono e auditoria visível a ele | Planejado |
 
