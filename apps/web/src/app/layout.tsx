@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import Link from 'next/link';
 import { connection } from 'next/server';
 import type { ReactNode } from 'react';
 import { env } from '../env';
@@ -49,8 +50,30 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
           Pular para o conteúdo
         </a>
         <header className="border-zinc-200 border-b dark:border-zinc-800">
-          <div className="mx-auto flex max-w-5xl items-center px-4 py-4 sm:px-6">
-            <span className="font-semibold text-lg tracking-tight">{PRODUCT_NAME}</span>
+          <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-4 py-4 sm:px-6">
+            <Link href="/" className="font-semibold text-lg tracking-tight">
+              {PRODUCT_NAME}
+            </Link>
+            <nav aria-label="Conta">
+              <ul className="flex items-center gap-2 text-sm">
+                <li>
+                  <Link
+                    href="/entrar"
+                    className="rounded-md px-3 py-2 font-medium hover:bg-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-700 dark:hover:bg-zinc-800"
+                  >
+                    Entrar
+                  </Link>
+                </li>
+                <li>
+                  <Link
+                    href="/cadastro"
+                    className="rounded-md bg-rose-700 px-3 py-2 font-semibold text-white hover:bg-rose-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-700"
+                  >
+                    Criar conta
+                  </Link>
+                </li>
+              </ul>
+            </nav>
           </div>
         </header>
         <main id="conteudo" tabIndex={-1} className="flex-1 focus:outline-none">

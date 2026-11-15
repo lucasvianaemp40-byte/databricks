@@ -58,6 +58,11 @@ audit:
     # chega via drizzle-kit > @esbuild-kit/core-utils (0.18.20, devDependency), que
     # usa apenas a API de transform; nenhum servidor do esbuild é iniciado.
     - GHSA-67mh-4wv8-2f99
+    # minimatch 7.x–11.0.0, DoS por amplificação de "globparts" (padrões com muitas chaves).
+    # Só chega via eslint e @eslint/config-array (devDependency, minimatch ^10); a correção
+    # (11.0.1) é major fora da faixa do ESLint. Os padrões vêm da config do repositório, nunca
+    # de usuário. Sai sozinho quando o ESLint aceitar a 11.
+    - GHSA-g3hv-75wg-m249
   ignorePrune: true
 
 # ---------------------------------------------------------------------------
@@ -78,6 +83,10 @@ catalog:
   react: 19.3.0
   react-dom: 19.3.0
   zod: 4.6.7
+  # Autenticação (ADR-0004). better-auth e @better-auth/* sempre na mesma versão.
+  better-auth: 1.7.14
+  # Garante em build que módulos de sessão e banco nunca vão para o bundle do navegador.
+  server-only: 0.0.1
   '@t3-oss/env-nextjs': 0.13.11
   # --- domínio ---
   temporal-polyfill: 1.0.6

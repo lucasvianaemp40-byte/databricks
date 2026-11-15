@@ -42,6 +42,22 @@ function isBareOrigin(value: string): boolean {
   );
 }
 
+/** URL `postgres://` ou `postgresql://` opcional. A mensagem nunca ecoa o valor (tem senha). */
+function postgresUrl(variable: string) {
+  return z
+    .string()
+    .refine(
+      (value) => {
+        const url = URL.parse(value);
+        return url !== null && (url.protocol === 'postgres:' || url.protocol === 'postgresql:');
+      },
+      { error: `${variable}: use uma URL postgres:// ou postgresql://` },
+    )
+    .optional();
+}
+
+const AUTH_VARIABLES = ['DATABASE_URL', 'AUTH_DATABASE_URL', 'BETTER_AUTH_SECRET'] as const;
+
 const server = {
   APP_ENV: z
     .enum(APP_ENVIRONMENTS, { error: `use um destes valores: ${APP_ENVIRONMENTS.join(', ')}` })
@@ -58,6 +74,18 @@ const server = {
       error: 'use só a origem, sem caminho, barra final, query, fragmento ou credenciais',
     })
     .default('http://localhost:3000'),
+  /**
+   * Banco da aplicação como `app_user` (RLS por tenant). Opcional: a landing e o health não
+   * usam banco. Sem ela, as telas de conta e do salão falham fechado no primeiro uso.
+   */
+  DATABASE_URL: postgresUrl('DATABASE_URL'),
+  /** Mesmo banco como `app_auth`: só o schema auth (Better Auth). Papel diferente do app_user. */
+  AUTH_DATABASE_URL: postgresUrl('AUTH_DATABASE_URL'),
+  /** Segredo do Better Auth (assinatura de cookies e tokens). Pelo menos 32 caracteres. */
+  BETTER_AUTH_SECRET: z
+    .string()
+    .min(32, { error: 'use pelo menos 32 caracteres aleatórios (ex.: openssl rand -base64 32)' })
+    .optional(),
 };
 
 /** Nenhuma variável de cliente por enquanto (ver o comentário do topo antes de criar uma). */
@@ -74,7 +102,29 @@ type EnvShape = typeof server & typeof client & typeof shared;
 /** Regras que cruzam variáveis. Só no servidor: no cliente APP_ENV não existe. */
 function createFinalSchema(shape: EnvShape, isServer: boolean) {
   return z.object(shape).superRefine((values, ctx) => {
-    if (!isServer || values.APP_ENV !== 'production') {
+    if (!isServer) {
+      return;
+    }
+    const missing = AUTH_VARIABLES.filter((variable) => values[variable] === undefined);
+    if (missing.length > 0 && missing.length < AUTH_VARIABLES.length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [missing[0] ?? ''],
+        message: 'defina DATABASE_URL, AUTH_DATABASE_URL e BETTER_AUTH_SECRET juntas',
+      });
+    }
+    if (
+      values.DATABASE_URL !== undefined &&
+      values.AUTH_DATABASE_URL !== undefined &&
+      URL.parse(values.DATABASE_URL)?.username === URL.parse(values.AUTH_DATABASE_URL)?.username
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['AUTH_DATABASE_URL'],
+        message: 'use outro papel do banco (app_auth), não o da aplicação',
+      });
+    }
+    if (values.APP_ENV !== 'production') {
       return;
     }
     const appUrl = URL.parse(values.APP_URL);
@@ -111,7 +161,17 @@ function failOnInvalidEnvironment(
 }
 
 /** Nomes que o app lê do ambiente. */
-export type RuntimeEnv = Readonly<Record<'APP_ENV' | 'APP_URL' | 'NODE_ENV', string | undefined>>;
+export type RuntimeEnv = Readonly<
+  Record<
+    | 'APP_ENV'
+    | 'APP_URL'
+    | 'NODE_ENV'
+    | 'DATABASE_URL'
+    | 'AUTH_DATABASE_URL'
+    | 'BETTER_AUTH_SECRET',
+    string | undefined
+  >
+>;
 
 export interface CreateAppEnvOptions {
   /** Força o modo servidor/cliente (testes). Padrão: `typeof window === 'undefined'`. */
@@ -141,4 +201,7 @@ export const env = createAppEnv({
   APP_ENV: process.env.APP_ENV,
   APP_URL: process.env.APP_URL,
   NODE_ENV: process.env.NODE_ENV,
+  DATABASE_URL: process.env.DATABASE_URL,
+  AUTH_DATABASE_URL: process.env.AUTH_DATABASE_URL,
+  BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET,
 });
