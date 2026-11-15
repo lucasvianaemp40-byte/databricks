@@ -21,11 +21,35 @@ function options() {
 
 describe('trava de produção (ADR-0004, threat model A1)', () => {
   it('recusa APP_ENV=production enquanto não houver MFA, verificação de e-mail e HIBP', () => {
-    expect(() => assertAuthAllowed('production')).toThrow(AuthNotAllowedInProductionError);
+    for (const nodeEnv of ['production', 'development']) {
+      expect(() => assertAuthAllowed('production', nodeEnv)).toThrow(
+        AuthNotAllowedInProductionError,
+      );
+    }
   });
 
-  it.each(['development', 'test', 'e2e', 'preview'])('libera %s', (appEnv) => {
-    expect(() => assertAuthAllowed(appEnv)).not.toThrow();
+  it('falha fechado: build de produção sem APP_ENV explícito não é tratado como desenvolvimento', () => {
+    for (const appEnv of [undefined, '']) {
+      expect(() => assertAuthAllowed(appEnv, 'production')).toThrow(
+        AuthNotAllowedInProductionError,
+      );
+    }
+  });
+
+  it('recusa APP_ENV desconhecido (só a lista fechada libera)', () => {
+    expect(() => assertAuthAllowed('staging', 'production')).toThrow(
+      AuthNotAllowedInProductionError,
+    );
+  });
+
+  it.each([
+    ['development', 'development'],
+    ['test', 'test'],
+    ['e2e', 'production'],
+    ['preview', 'production'],
+    [undefined, 'development'],
+  ])('libera APP_ENV=%s com NODE_ENV=%s', (appEnv, nodeEnv) => {
+    expect(() => assertAuthAllowed(appEnv, nodeEnv)).not.toThrow();
   });
 });
 

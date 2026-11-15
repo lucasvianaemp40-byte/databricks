@@ -36,5 +36,8 @@ BEGIN
   END IF;
 
   EXECUTE format('GRANT CONNECT ON DATABASE %I TO app_auth', current_database());
+  -- As tabelas do Better Auth são procuradas sem schema: o search_path vem do papel, neste
+  -- banco, e não só da conexão (um pooler pode não repassar `options`).
+  EXECUTE format('ALTER ROLE app_auth IN DATABASE %I SET search_path = auth', current_database());
 END
 $$;

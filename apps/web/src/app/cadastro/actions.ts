@@ -2,7 +2,8 @@
 
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { authErrorMessage } from '../../lib/auth/messages';
+import { authErrorMessage, TOO_MANY_ATTEMPTS } from '../../lib/auth/messages';
+import { authLimits, clientIp } from '../../lib/auth/rate-limit';
 import { getAuth } from '../../lib/auth/server';
 import { signUpSchema } from '../../lib/auth/validation';
 import { echoValues, type FormState, fieldErrorsFrom, readFields } from '../../lib/form-state';
@@ -21,8 +22,13 @@ export async function signUpAction(
   if (!parsed.success) {
     return { fieldErrors: fieldErrorsFrom(parsed.error), values };
   }
+  const requestHeaders = await headers();
+  // Cadastro em massa custa scrypt e enche o banco (threat model A13).
+  if (!authLimits.signUpByIp.hit(`ip:${clientIp(requestHeaders)}`)) {
+    return { message: TOO_MANY_ATTEMPTS, values };
+  }
   try {
-    await getAuth().api.signUpEmail({ body: parsed.data, headers: await headers() });
+    await getAuth().api.signUpEmail({ body: parsed.data, headers: requestHeaders });
   } catch (error) {
     return { message: authErrorMessage(error, 'sign-up'), values };
   }

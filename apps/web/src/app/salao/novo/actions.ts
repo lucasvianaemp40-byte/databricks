@@ -3,13 +3,15 @@
 import { createTenantWithFirstLocation, TenantSlugTakenError } from '@salon/db';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { requireUser } from '../../../lib/auth/dal';
+import { getActiveMembership, requireUser } from '../../../lib/auth/dal';
 import { authErrorMessage, SLUG_TAKEN_ERROR } from '../../../lib/auth/messages';
 import { getAppDb, getAuth } from '../../../lib/auth/server';
 import { createSalonSchema, suggestSlug } from '../../../lib/auth/validation';
 import { echoValues, type FormState, fieldErrorsFrom, readFields } from '../../../lib/form-state';
+import { findTenantSummary } from '../../../lib/tenant-summary';
 
 const FIELDS = ['salonName', 'slug', 'locationName', 'timezone'] as const;
+const NOT_OWNER_ERROR = 'Só o dono do salão pode concluir este cadastro.';
 export type CreateSalonField = (typeof FIELDS)[number];
 
 /**
@@ -32,12 +34,29 @@ export async function createSalonAction(
   const auth = getAuth();
   const requestHeaders = await headers();
 
+  // Reenvio da action (o id dela está no bundle): salão completo não é recriado nem ganha
+  // unidade; só o owner retoma uma criação interrompida (threat model A6 e A7).
+  const membership = await getActiveMembership();
+  if (membership !== null) {
+    if (membership.role !== 'owner') {
+      return { message: NOT_OWNER_ERROR, values };
+    }
+    if ((await findTenantSummary(membership.tenantId)) !== null) {
+      redirect('/painel');
+    }
+  }
+
   let organization: { id: string; name: string; slug: string };
   try {
     // Um salão por conta (organizationLimit: 1): se já existe, é retomada.
     const existing = await auth.api.listOrganizations({ headers: requestHeaders });
+    const current = existing[0];
+    if (current !== undefined && current.id !== membership?.tenantId) {
+      // Organização que não é a ativa de um owner: não retoma (estado inesperado).
+      return { message: NOT_OWNER_ERROR, values };
+    }
     organization =
-      existing[0] ??
+      current ??
       (await auth.api.createOrganization({
         body: { name: input.salonName, slug: input.slug },
         headers: requestHeaders,

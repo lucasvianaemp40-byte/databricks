@@ -105,6 +105,47 @@ describe('runner de migrações', () => {
     expect(owners).toEqual([{ owner: 'app_migrator' }]);
   });
 
+  it('migração privilegiada não deixa objeto do usuário da conexão em schema nenhum', async () => {
+    // O guarda estático (migrate.test.ts) olha o SQL; este olha o resultado: tudo o que as
+    // migrações criam é do app_migrator, exceto o que a extensão (btree_gist) traz, os
+    // construtores internos do tipo range, o schema public e o controle do runner (drizzle).
+    const url = await scratchDatabase();
+    await runMigrations({ databaseUrl: url });
+    const owned = await query<{ label: string }>(
+      url,
+      `SELECT o.label FROM (
+         SELECT c.oid::regclass::text AS label, c.relowner AS owner, c.oid AS objid,
+                'pg_class'::regclass AS classid, n.nspname
+           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         UNION ALL
+         SELECT 'função ' || p.oid::regprocedure::text, p.proowner, p.oid, 'pg_proc'::regclass, n.nspname
+           FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE NOT EXISTS (SELECT FROM pg_depend d
+                             WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid
+                               AND d.refclassid = 'pg_type'::regclass AND d.deptype = 'i')
+         UNION ALL
+         SELECT 'tipo ' || t.oid::regtype::text, t.typowner, t.oid, 'pg_type'::regclass, n.nspname
+           FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+          -- Array de tipo da extensão: dependência interna do elemento, não membro direto.
+          WHERE NOT EXISTS (SELECT FROM pg_depend d
+                             WHERE d.classid = 'pg_type'::regclass AND d.objid = t.typelem
+                               AND d.deptype = 'e')
+         UNION ALL
+         SELECT 'schema ' || n.nspname, n.nspowner, n.oid, 'pg_namespace'::regclass, n.nspname
+           FROM pg_namespace n
+       ) AS o
+       WHERE o.owner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+         AND o.nspname NOT IN ('pg_catalog', 'information_schema') AND o.nspname NOT LIKE 'pg\\_%'
+         AND o.label <> 'schema public'
+         -- Controle de migrações do próprio runner (drizzle.__drizzle_migrations).
+         AND o.nspname <> 'drizzle'
+         AND NOT EXISTS (SELECT FROM pg_depend d
+                          WHERE d.classid = o.classid AND d.objid = o.objid AND d.deptype = 'e')
+       ORDER BY 1`,
+    );
+    expect(owned).toEqual([]);
+  });
+
   it('dois runners simultâneos no mesmo banco: o advisory lock serializa (aplica uma vez só)', async () => {
     const url = await scratchDatabase();
     const results = await Promise.all([

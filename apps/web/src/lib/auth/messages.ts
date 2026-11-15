@@ -12,7 +12,8 @@ export const GENERIC_SIGN_UP_ERROR =
   'Não foi possível criar a conta com esses dados. Confira e tente de novo, ou entre se já tiver conta.';
 const GENERIC_CREATE_SALON_ERROR = 'Não foi possível criar o salão agora. Tente de novo.';
 export const SLUG_TAKEN_ERROR = 'Este endereço já está em uso por outro salão. Escolha outro.';
-const TOO_MANY_ATTEMPTS = 'Muitas tentativas seguidas. Aguarde alguns minutos e tente de novo.';
+export const TOO_MANY_ATTEMPTS =
+  'Muitas tentativas seguidas. Aguarde alguns minutos e tente de novo.';
 
 const GENERIC: Readonly<Record<AuthErrorContext, string>> = {
   'sign-in': GENERIC_SIGN_IN_ERROR,

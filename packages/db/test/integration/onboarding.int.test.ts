@@ -7,6 +7,7 @@ import {
   createTenantWithFirstLocation,
   getTenantSummary,
   type NewTenantInput,
+  TenantOnboardingConflictError,
 } from '../../src/onboarding';
 import { locations, tenants } from '../../src/schema';
 import { withTenant } from '../../src/tenant';
@@ -95,6 +96,20 @@ describe('criação do salão com a primeira unidade', () => {
     const seenByNew = await readAs(db, input.tenantId);
     expect(seenByNew.tenants.map((row) => row.id)).toEqual([input.tenantId]);
     expect(seenByNew.locations.map((row) => row.id)).not.toContain(otherTenant.locationId);
+  });
+
+  it('reenvio com OUTRA unidade num salão que já tem unidade: recusado, nada novo (sem unidade extra)', async () => {
+    const input = newTenantInput();
+    await createTenantWithFirstLocation(db, input);
+    const replay = {
+      ...input,
+      location: { name: 'Filial', slug: 'filial', timezone: 'America/Sao_Paulo' },
+    };
+    await expect(createTenantWithFirstLocation(db, replay)).rejects.toBeInstanceOf(
+      TenantOnboardingConflictError,
+    );
+    const seen = await readAs(db, input.tenantId);
+    expect(seen.locations.map((location) => location.name)).toEqual(['Unidade Centro']);
   });
 
   it('não reaproveita salão existente de outro dono: id já usado com outro slug é recusado', async () => {

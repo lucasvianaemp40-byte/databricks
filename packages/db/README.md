@@ -55,6 +55,7 @@ const rows = await withTenant(
   | 23514 (trigger) | `InvalidStatusTransitionError` | transição de status proibida |
   | 23505 (`idempotency_key`) | `IdempotencyKeyConflictError` | comando de criação repetido |
   | 23505 (`<tabela>_pkey`) | `IdentifierConflictError` | id já usado, possivelmente por OUTRO tenant; responda genérico (404/409), nunca "já existe" |
+  | 23505 (`tenants_slug_key`) | `TenantSlugTakenError` | endereço público do salão já usado por outro salão; responda 409 pedindo outro |
   | 40P01, 40001 | `TransactionConflictError` | conflito com outra transação que persistiu depois das 3 tentativas; responda 503 com `Retry-After` curto |
   | (nenhum) | `TransactionClosedError` | `tx` usado depois do fim do callback (bug do chamador) |
 
@@ -62,6 +63,13 @@ const rows = await withTenant(
   PostgreSQL, porque ele pode conter dados pessoais. Atenção: o `DrizzleQueryError` que passa
   inalterado (e que fica em `cause` dos traduzidos) traz os parâmetros da consulta na
   mensagem; não o registre cru em log.
+- `createTenantWithFirstLocation(db, input, options?)` cria o salão (`app.tenants`, em `trial`,
+  com o **mesmo id** da organização do Better Auth) e a primeira unidade numa transação, no
+  contexto do próprio tenant. Idempotente para retomar uma criação interrompida; um reenvio com
+  OUTRA unidade num salão que já tem unidade é recusado (`TenantOnboardingConflictError`), e
+  slug em uso vira `TenantSlugTakenError` (o slug é público, então dizer "em uso" não vaza
+  nada). `getTenantSummary(db, tenantId)` lê nome, slug, situação e unidades para o painel
+  (`null` se o tenant ainda não existe). O `tenantId` vem sempre da sessão, nunca do cliente.
 - `newId()` gera um UUIDv7 (as PKs já usam por padrão). É previsível, então nunca use como
   segredo. Ids nascem no servidor: não aceite `id` (nem `tenant_id`) vindo do cliente em
   INSERT/upsert, nem UPDATE de `id`.
@@ -109,6 +117,12 @@ EXCLUDE recusa. SQL manual ou job usa `date_trunc('milliseconds', ...)`.
    NOBYPASSRLS, não são donos de nada, não herdam papel nenhum e não têm TRUNCATE, REFERENCES
    nem TRIGGER. `app_worker` só lê e altera `appointments.status` (GRANT de coluna; o trigger
    sincroniza as ocupações). Nenhum papel recebe senha no repositório.
+   `app_auth` (migração 0005) é a conexão do Better Auth: LOGIN, com as mesmas restrições,
+   `search_path=auth` fixado no papel, e privilégio **só** no schema `auth` (usuários, contas
+   com hash de senha, sessões, organizações, membros). `app_user` e `app_worker` não têm nem
+   USAGE em `auth`, e o `app_auth` não tem nada em `app`/`app_private`: credencial e dado de
+   tenant ficam em papéis separados. As invariantes de deploy conferem isso (posse, privilégios
+   de tabela/coluna e USAGE de schema).
 2. **RLS ENABLE + FORCE** em toda tabela de tenant e em `tenants`. Uma política RESTRICTIVE
    `tenant_isolation`, para PUBLIC e inclusive para o dono, exige
    `tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid`. Uma política
@@ -196,6 +210,13 @@ migração aplicada cujo arquivo mudou.
 | `0002_schema` | `app_migrator` | gerada pelo drizzle-kit a partir de `src/schema` |
 | `0003_tenant_security` | `app_migrator` | triggers, EXCLUDE, RLS, GRANTs e função de invariantes |
 | `0004_staff_schedule_lock` | `app_migrator` | fila por profissional ao gravar ocupação ativa (sem deadlock no EXCLUDE) |
+| `0005_auth_role` | usuário da conexão (marcador) | papel `app_auth` (idempotente; corrige atributos; `search_path=auth` no banco). Não cria objeto |
+| `0006_auth_schema` | `app_migrator` | schema `auth` com as tabelas do Better Auth 1.7 (plugin organization), únicos de membro e de conta, grants ao `app_auth` e invariantes cobrindo o `app_auth` |
+
+Migrações privilegiadas formam uma lista fechada (`src/migrate.test.ts`) e não podem criar
+objeto: o teste estático recusa `CREATE TABLE/SCHEMA/FUNCTION...` nelas, e o de integração
+confere num banco novo que nada fica com o usuário da conexão (fora a extensão e o controle
+do runner).
 
 ```bash
 pnpm --filter @salon/db generate --name=<descricao>   # mudou src/schema
@@ -279,12 +300,21 @@ Cobertura de integração:
 ## Variáveis de ambiente
 
 Veja `.env.example`. Resumo: `DATABASE_URL` (app_user), `DATABASE_URL_WORKER` (app_worker),
-`DATABASE_URL_MIGRATOR` (superusuário/admin, só no deploy) e `TEST_DATABASE_URL` (testes).
+`DATABASE_URL_MIGRATOR` (superusuário/admin, só no deploy) e `TEST_DATABASE_URL` (testes). O
+app web lê também `AUTH_DATABASE_URL` (app_auth); ver `apps/web/README.md`.
 
 ## Produção (pendências documentadas)
 
-- Senhas de `app_user`/`app_worker` são definidas fora do repositório (`ALTER ROLE ... PASSWORD`
-  via IaC/console). Use TLS (`sslmode=verify-full`).
+- Senhas de `app_user`/`app_worker`/`app_auth` são definidas fora do repositório
+  (`ALTER ROLE ... PASSWORD` via IaC/console). Use TLS (`sslmode=verify-full`). Ordem de deploy
+  da 0005/0006: migrar, definir a senha do `app_auth` e só então subir o web com
+  `AUTH_DATABASE_URL` (até lá, o web antigo continua funcionando: a mudança só acrescenta).
+- O schema se chama `auth`. No Neon, a Data API/RLS (`pg_session_jwt`) também cria um schema
+  `auth`: com ela ligada no projeto, a 0006 falha (sem `IF NOT EXISTS`, de propósito, para não
+  adotar schema alheio). Confira antes do primeiro deploy (não verificado).
+- `auth.session.token` e `auth.verification.value` ficam em texto puro (formato do Better
+  Auth): quem lê o banco como `app_auth` sequestra sessões. Risco aceito no threat model
+  2026-10-30-conta-e-salao; expurgo de sessões e verificações vencidas é pendência.
 - O admin que roda as migrações precisa de CREATEROLE e de `SET` em `app_migrator`. O bootstrap
   concede o `SET` a quem criou o papel. Em provedores como o Neon, papéis criados pelo console
   entram em grupos com BYPASSRLS, então crie `app_*` **por SQL** (é o que a migração 0000 faz).
@@ -294,8 +324,7 @@ Veja `.env.example`. Resumo: `DATABASE_URL` (app_user), `DATABASE_URL_WORKER` (a
 - O bootstrap revoga o CREATE de PUBLIC no schema `public`. Se o admin não for dono do schema,
   o REVOKE só avisa e a função de invariantes recusa o deploy enquanto um papel de runtime
   puder criar objetos ali: rode o REVOKE como dono do banco.
-- Ainda não implementado (próximas iterações): tabelas do Better Auth (schema `auth`, papel
-  `app_auth`); resolução pública `slug -> tenant` para a página de agendamento (função
+- Ainda não implementado (próximas iterações): resolução pública `slug -> tenant` para a página de agendamento (função
   `SECURITY DEFINER` dedicada, já que `tenants` só é visível ao próprio tenant: entra em
   `executable_definers` da função de invariantes, com `search_path` fixo, dona do
   `app_migrator` e fechada a PUBLIC); job de expiração de holds e de no-show (pg-boss, papel

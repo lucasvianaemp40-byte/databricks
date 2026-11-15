@@ -55,7 +55,7 @@ const RUNTIME_ROLES = ['app_user', 'app_worker', 'app_auth'] as const;
  */
 export const INVARIANTS_FUNCTION_SHA256 =
   // biome-ignore lint/security/noSecrets: hash sha256 público do corpo da função, não é segredo.
-  '43b9a32a7eb5453802e68c5b7b966901a75301b914fb5446f804c2a7c1cc21a3';
+  '81a0a30b28b378dda9c8cd419798cb026f3298939b4ec997e910d57ab7aa85d0';
 
 export class MigrationError extends Error {
   constructor(message: string, options?: ErrorOptions) {

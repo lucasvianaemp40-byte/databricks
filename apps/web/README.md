@@ -1,9 +1,11 @@
 # @salon/web
 
-App Next.js 16 (App Router, `src/`) do Agenda Salão (nome provisório). Hoje é um **esqueleto
-andante seguro**: landing pública, página 404, health check, CSP com nonce, cabeçalhos de
-segurança, env validada e testes (unit, E2E, acessibilidade). Autenticação, banco, filas,
-Sentry, WhatsApp e Pix entram nas próximas iterações (ver [Próximos passos](#próximos-passos)).
+App Next.js 16 (App Router, `src/`) do Agenda Salão (nome provisório). Tem a landing pública,
+a página 404, o health check, CSP com nonce, cabeçalhos de segurança e env validada. Desde a
+**1ª entrega do ADR-0004** tem também a conta do dono (cadastro, login e saída), a criação do
+salão com a primeira unidade e o painel inicial, contra PostgreSQL. Testes: unit, E2E com banco
+real e acessibilidade. Filas, Sentry, WhatsApp e Pix entram nas próximas iterações (ver
+[Próximos passos](#próximos-passos)).
 
 ## Comandos
 
@@ -17,19 +19,27 @@ Rode da raiz do monorepo (`pnpm <script>`) ou só deste pacote (`pnpm --filter @
 | `typecheck` | `next typegen && tsc` (gera os tipos de rota antes; `next-env.d.ts` é ignorado no git) |
 | `lint`      | ESLint type-aware (`eslint.base.mjs` + Next + react-hooks); o Biome roda na raiz |
 | `test`      | Vitest: unit de `src/**/*.test.ts` (sem navegador e sem servidor)                |
-| `e2e`       | Playwright contra `next build && next start` (ver [E2E](#e2e))                   |
+| `e2e`       | Playwright contra `next build && next start`, com PostgreSQL descartável (ver [E2E](#e2e)) |
 
 ## Estrutura
 
 ```
 src/
   app/                 App Router: layout, página inicial, 404, erros, /api/health, ícone
+  app/cadastro, app/entrar          conta do dono (página, formulário e Server Action)
+  app/salao/novo, app/painel        criação do salão + primeira unidade; painel e saída
+  components/form.tsx  campos acessíveis (rótulo, dica e erro ligados) e botão de envio
+  lib/auth/            Better Auth: opções puras (config.ts), instância e banco (server.ts,
+                       server-only), DAL (dal.ts), validação zod (validation.ts), mensagens
+  lib/form-state.ts    estado dos formulários (nunca devolve a senha)
+  lib/time-zones.ts    os 16 fusos IANA do Brasil com nome amigável
   lib/security/        CSP (função pura), nonce, cabeçalhos estáticos (+ testes)
   lib/appointment-status-labels.ts   rótulos pt-BR dos status do @salon/scheduling-core
   env.ts               variáveis de ambiente validadas (Zod, @t3-oss/env-nextjs)
   proxy.ts             Proxy do Next 16: nonce + CSP por requisição
-e2e/                   Playwright: home, acessibilidade (axe), cabeçalhos de segurança, env em
-                       runtime, fixture de console (support/)
+e2e/                   Playwright: home, conta e salão (auth.spec), acessibilidade (axe),
+                       cabeçalhos de segurança, env em runtime, fixture de console (support/)
+scripts/with-e2e-database.mjs   banco descartável + papéis com senha aleatória para o E2E/DAST
 ```
 
 O `@salon/scheduling-core` é consumido como fonte TypeScript (`transpilePackages`). O app só
@@ -47,6 +57,13 @@ valores). Modelo em [`.env.example`](./.env.example).
 | `APP_ENV`  | servidor (runtime)      | `development`           | `development`, `test`, `e2e`, `preview` ou `production`. Só `production` é indexável     |
 | `APP_URL`  | servidor (runtime)      | `http://localhost:3000` | origem http(s) sem caminho/barra final; com `APP_ENV=production`, https e host não local |
 | `NODE_ENV` | compartilhada           | `development`           | definida pelo Next (`production` no build e no `next start`)                             |
+| `DATABASE_URL` | servidor (runtime) | —                    | URL `postgres(ql)://` do papel `app_user` (RLS por tenant)                               |
+| `AUTH_DATABASE_URL` | servidor (runtime) | —               | URL do papel `app_auth` (só o schema `auth`); papel diferente do da `DATABASE_URL`       |
+| `BETTER_AUTH_SECRET` | servidor (runtime) | —              | pelo menos 32 caracteres aleatórios (assina cookies e tokens)                            |
+
+As três últimas são **opcionais, mas juntas**: sem nenhuma, o app sobe (landing e health não
+usam banco) e as telas de conta e salão falham fechado no primeiro uso; com só uma ou duas, o
+boot falha. Nenhuma mensagem de erro ecoa o valor (as URLs têm senha).
 
 Variáveis de servidor são lidas em **runtime**: a validação do boot e o valor usado pelo
 servidor são sempre os mesmos, e o mesmo build serve em outra origem ou ambiente sem rebuild
@@ -70,6 +87,34 @@ segredo.
 em 2025–2026 e um matcher alterado tira a cobertura de rotas e Server Functions sem aviso.
 Autenticação e autorização serão feitas **dentro** de cada Server Action, Route Handler e na
 camada de acesso a dados.
+
+### Autenticação (1ª entrega do ADR-0004)
+
+Threat model: [`2026-10-30-conta-e-salao.md`](../../docs/seguranca/threat-models/2026-10-30-conta-e-salao.md).
+
+- **Trava de produção:** `assertAuthAllowed` só libera `APP_ENV` de uma lista fechada
+  (`development`, `test`, `e2e`, `preview`) e, sem `APP_ENV`, só fora de `NODE_ENV=production`:
+  um deploy de produção que esqueça a variável também fica travado. Vale até a 2ª entrega
+  (segundo fator, verificação de e-mail, HIBP e limite em banco). Travadas, as telas de conta
+  e salão falham fechado; a landing continua no ar.
+- **Sem rota `/api/auth`:** o Better Auth é chamado só de Server Actions (`auth.api.*`), com
+  zod estrito na frente e a checagem de `Origin` do Next. Menos superfície: nenhum endpoint
+  do Better Auth (convites, troca de organização...) fica exposto. Consequência: o limite de
+  tentativas do Better Auth (que só roda no roteador HTTP) não vale para chamadas diretas.
+- **Limite de tentativas provisório** (`lib/auth/rate-limit.ts`): janela deslizante em memória,
+  login por e-mail (10 em 15 min) e por IP (30 em 15 min), cadastro por IP (30 por hora);
+  recusada também conta. Vale por processo, e o IP vem de `x-real-ip`/`x-forwarded-for`, que
+  só valem atrás de um proxy que os sobrescreva (sem ele, o limite por IP é contornável; o
+  por e-mail não). O limite em banco e o Turnstile vêm na 2ª entrega.
+- **Cookie** `__Host-salao.session_token`: `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, sem
+  `Domain` (o E2E confere todo `Set-Cookie`); sem cache de sessão no cookie; IP não guardado.
+- **DAL** (`lib/auth/dal.ts`): o tenant vem só da sessão e o vínculo usuário × salão é
+  conferido no banco a cada requisição (`getActiveMember`) antes do `withTenant`. A sessão
+  nova (login) já nasce apontando para o salão do usuário (hook `session.create.before`).
+- **Mensagens fixas:** login e cadastro não distinguem e-mail existente de inexistente;
+  nenhuma mensagem repassa erro interno. O endereço (slug) em uso é dito, porque é público.
+- **Criação do salão** idempotente: organização (o dono vira `owner`) e, com o mesmo id,
+  tenant e primeira unidade; uma criação interrompida é retomada no formulário.
 
 ### Content-Security-Policy (por requisição, com nonce)
 
@@ -227,6 +272,12 @@ reverse proxy) antes de expor o app.
 
 O `webServer` do Playwright roda `next build && next start` em `127.0.0.1:3100` com
 `APP_ENV=e2e` e nunca reaproveita um servidor aberto (um `next dev` na porta teria outra CSP).
+
+Banco: `pnpm e2e` passa por `scripts/with-local-postgres.sh` (usa `TEST_DATABASE_URL` ou sobe
+um PostgreSQL efêmero) e `scripts/with-e2e-database.mjs`, que cria um banco descartável,
+aplica as migrações, dá senhas aleatórias a `app_user`/`app_auth`, gera o
+`BETTER_AUTH_SECRET` e roda o Playwright **sem** a URL de superusuário. O banco é apagado no
+fim. O DAST usa o mesmo wrapper.
 Variáveis opcionais: `E2E_PORT`, `E2E_BASE_URL` (testa um ambiente já no ar; sem build local,
 a config tira o `runtime-env.spec.ts` de todos os projetos), `E2E_SKIP_BUILD=1` (reaproveita
 o build) e `E2E_CHROMIUM_EXECUTABLE_PATH`.
@@ -251,9 +302,11 @@ certo, é a referência.
 
 Documentados aqui, **não implementados** nesta iteração:
 
-- Better Auth (organizações = tenants, 2FA, passkeys) com autorização no DAL e nas actions;
-  o Proxy, no máximo, redireciona quem não tem cookie de sessão (conveniência, não segurança).
-- `server-only` nos módulos de dados e autenticação (sai do `package.json` enquanto não há uso).
+- 2ª entrega do ADR-0004, que tira a trava de produção: segundo fator (TOTP ou passkey)
+  obrigatório para a equipe, verificação de e-mail, HIBP, Turnstile, limite de tentativas em
+  banco, `lock_timeout` no `withTenant`, inatividade e tempo absoluto de sessão por papel,
+  convites (E1.4), remoção de membro (E1.5), recuperação de senha (E1.6) e sessões ativas
+  (E1.7). O Proxy, no máximo, redireciona quem não tem cookie (conveniência, não segurança).
 - `assertSameOrigin` (Fetch Metadata + `Origin` + `Content-Type: application/json`) em todo
   Route Handler não-GET; `Cache-Control: no-store` nas páginas autenticadas;
   `Clear-Site-Data: "cache", "storage"` no logout.

@@ -126,6 +126,38 @@ test.describe('conta do dono e criação do salão', () => {
     expect(messages[0]).toBe(messages[1]);
   });
 
+  test('muitas senhas erradas no mesmo e-mail: o login passa a pedir para esperar', async ({
+    browser,
+  }) => {
+    // IP próprio por cabeçalho: sem proxy na frente, o app usa o x-forwarded-for, e o teste
+    // não gasta a cota de 127.0.0.1 dos outros testes. O limite por e-mail não depende disso.
+    const ip = `198.51.100.${String(1 + ((randomBytes(1)[0] ?? 0) % 250))}`;
+    const context = await browser.newContext({ extraHTTPHeaders: { 'x-forwarded-for': ip } });
+    try {
+      const page = await context.newPage();
+      const owner = uniqueOwner('limite');
+      await signUp(page, owner);
+      await context.clearCookies();
+      const alert = page.locator('form').getByRole('alert');
+      for (let attempt = 1; attempt <= 10; attempt += 1) {
+        await page.goto('/entrar');
+        await page.getByLabel('E-mail').fill(owner.email);
+        await page.getByLabel('Senha').fill('senha errada mas comprida');
+        await page.getByRole('button', { name: 'Entrar' }).click();
+        await expect(alert).toHaveText('E-mail ou senha incorretos.');
+      }
+      // A 11ª, mesmo com a senha CERTA, espera: força bruta não confirma o acerto.
+      await page.goto('/entrar');
+      await page.getByLabel('E-mail').fill(owner.email);
+      await page.getByLabel('Senha').fill(PASSWORD);
+      await page.getByRole('button', { name: 'Entrar' }).click();
+      await expect(alert).toHaveText(/Muitas tentativas seguidas/);
+      await expect(page).toHaveURL(/\/entrar$/);
+    } finally {
+      await context.close();
+    }
+  });
+
   test('cadastro recusa senha curta no servidor, sem perder nome e e-mail', async ({ page }) => {
     const owner = uniqueOwner('senha');
     await page.goto('/cadastro');

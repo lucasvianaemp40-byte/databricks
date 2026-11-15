@@ -118,6 +118,10 @@ CREATE INDEX "invitation_email_idx" ON auth."invitation" ("email");
 -- garante sob concorrência (dois cliques em "criar salão" ou no aceite de convite).
 CREATE UNIQUE INDEX "member_organizationId_userId_key" ON auth."member" ("organizationId", "userId");
 --> statement-breakpoint
+-- Uma conta por (provedor, id no provedor): duas vinculações simultâneas não duplicam. Feito
+-- com a tabela vazia, porque o runner não aceita CONCURRENTLY.
+CREATE UNIQUE INDEX "account_providerId_accountId_key" ON auth."account" ("providerId", "accountId");
+--> statement-breakpoint
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA auth TO app_auth;
 --> statement-breakpoint
 CREATE OR REPLACE FUNCTION app_private.assert_security_invariants()
@@ -454,13 +458,26 @@ BEGIN
       '%s: materialized view ou foreign table legível pela aplicação (sem RLS)', r.rel);
   END LOOP;
 
-  -- (h) Schemas e banco: PUBLIC sem USAGE/CREATE em app e app_private; runtime sem USAGE em
-  --     app_private e sem CREATE em schema nenhum nem no banco.
+  -- (h) Schemas e banco: PUBLIC sem USAGE/CREATE em app, app_private e auth; runtime sem USAGE
+  --     em app_private e sem CREATE em schema nenhum nem no banco; só o app_auth usa o schema
+  --     auth, e o app_auth não usa app nem app_private.
   FOR r IN
     SELECT format('schema %s: %s para PUBLIC', n.nspname, privilege) AS problem
       FROM pg_namespace n CROSS JOIN unnest(ARRAY['USAGE', 'CREATE']) AS privilege
-     WHERE n.nspname IN ('app', 'app_private')
+     WHERE n.nspname IN ('app', 'app_private', 'auth')
        AND has_schema_privilege('public', n.oid, privilege)
+    UNION ALL
+    SELECT format('%s tem USAGE no schema auth (credenciais: só app_auth)', role_name)
+      FROM pg_namespace n CROSS JOIN unnest(runtime_roles) AS role_name
+     WHERE n.nspname = 'auth' AND role_name <> 'app_auth'
+       AND EXISTS (SELECT FROM pg_roles WHERE rolname = role_name)
+       AND has_schema_privilege(role_name, n.oid, 'USAGE')
+    UNION ALL
+    SELECT format('app_auth tem USAGE no schema %s (app_auth: só o schema auth)', n.nspname)
+      FROM pg_namespace n
+     WHERE n.nspname IN ('app', 'app_private')
+       AND EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_auth')
+       AND has_schema_privilege('app_auth', n.oid, 'USAGE')
     UNION ALL
     SELECT format('%s pode criar objetos no schema %s', role_name, n.nspname)
       FROM pg_namespace n CROSS JOIN unnest(runtime_roles) AS role_name

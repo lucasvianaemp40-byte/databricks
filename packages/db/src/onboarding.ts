@@ -1,4 +1,4 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import type { Database } from './client';
 import { locations, tenants } from './schema';
 import { type WithTenantOptions, withTenant } from './tenant';
@@ -66,20 +66,28 @@ export async function createTenantWithFirstLocation(
         throw new TenantOnboardingConflictError();
       }
 
-      await tx
+      // Só a PRIMEIRA unidade nasce aqui: retomar com a mesma unidade devolve a existente;
+      // um reenvio com outra unidade num salão que já tem unidade é recusado (unidade nova
+      // é outra funcionalidade, com autorização própria).
+      const existing = await tx
+        .select({ id: locations.id, slug: locations.slug })
+        .from(locations)
+        .where(eq(locations.tenantId, input.tenantId));
+      if (existing.length > 0) {
+        const same = existing.find((location) => location.slug === input.location.slug);
+        if (same === undefined) {
+          throw new TenantOnboardingConflictError();
+        }
+        return { tenantId: input.tenantId, locationId: same.id };
+      }
+      const [location] = await tx
         .insert(locations)
         .values({
           name: input.location.name,
           slug: input.location.slug,
           timezone: input.location.timezone,
         })
-        .onConflictDoNothing({ target: [locations.tenantId, locations.slug] });
-      const [location] = await tx
-        .select({ id: locations.id })
-        .from(locations)
-        .where(
-          and(eq(locations.tenantId, input.tenantId), eq(locations.slug, input.location.slug)),
-        );
+        .returning({ id: locations.id });
       if (location === undefined) {
         throw new TenantOnboardingConflictError();
       }

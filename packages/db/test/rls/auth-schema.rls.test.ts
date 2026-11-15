@@ -1,5 +1,5 @@
-import type pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import pg from 'pg';
+import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { PG_ERROR } from '../../src/errors';
 import { captureSqlState, connectAsAdmin, connectAsAuth } from '../helpers/connections';
 
@@ -134,6 +134,60 @@ describe('schema auth (Better Auth) e papel app_auth', () => {
     }
   });
 
+  it('app_user e app_worker não leem credenciais nem sessões (42501 de ponta a ponta)', async () => {
+    for (const url of [inject('appUserDatabaseUrl'), inject('appWorkerDatabaseUrl')]) {
+      const client = new pg.Client({ connectionString: url });
+      await client.connect();
+      try {
+        for (const table of ['auth.account', 'auth.session', 'auth."user"']) {
+          expect(await captureSqlState(client.query(`SELECT 1 FROM ${table} LIMIT 1`)), table).toBe(
+            PG_ERROR.insufficientPrivilege,
+          );
+        }
+      } finally {
+        await client.end();
+      }
+    }
+  });
+
+  it('app_auth tem search_path=auth no banco (não depende só do cliente)', async () => {
+    const { rows } = await admin.query<{ config: string[] }>(`
+      SELECT s.setconfig AS config FROM pg_db_role_setting s
+        JOIN pg_roles r ON r.oid = s.setrole
+        JOIN pg_database d ON d.oid = s.setdatabase
+       WHERE r.rolname = 'app_auth' AND d.datname = current_database()`);
+    expect(rows).toEqual([{ config: ['search_path=auth'] }]);
+  });
+
+  it('um membro por (organização, usuário) e uma conta por (provedor, id): 23505 no repetido', async () => {
+    const auth = connectAsAuth();
+    try {
+      const { rows } = await auth.query<{ user_id: string; org_id: string }>(`
+        WITH u AS (
+          INSERT INTO "user" (name, email, "emailVerified")
+          VALUES ('Membro Único', 'membro+unico@example.test', false) RETURNING id
+        ), o AS (
+          INSERT INTO organization (name, slug, "createdAt")
+          VALUES ('Salão Único', 'salao-unico-auth', now()) RETURNING id
+        )
+        SELECT u.id AS user_id, o.id AS org_id FROM u, o`);
+      const ids = rows[0];
+      expect(ids).toBeDefined();
+      const member = `INSERT INTO member ("organizationId", "userId", role, "createdAt") VALUES ($1, $2, 'owner', now())`;
+      await auth.query(member, [ids?.org_id, ids?.user_id]);
+      expect(await captureSqlState(auth.query(member, [ids?.org_id, ids?.user_id]))).toBe(
+        PG_ERROR.uniqueViolation,
+      );
+      const account = `INSERT INTO account ("accountId", "providerId", "userId", "updatedAt") VALUES ($1::text, 'credential', $2::uuid, now())`;
+      await auth.query(account, [ids?.user_id, ids?.user_id]);
+      expect(await captureSqlState(auth.query(account, [ids?.user_id, ids?.user_id]))).toBe(
+        PG_ERROR.uniqueViolation,
+      );
+    } finally {
+      await auth.end();
+    }
+  });
+
   it.each([
     [
       'app_user lendo credenciais',
@@ -160,6 +214,21 @@ describe('schema auth (Better Auth) e papel app_auth', () => {
       'app_auth com TRUNCATE',
       'GRANT TRUNCATE ON auth.session TO app_auth',
       /auth\.session: privilégio TRUNCATE concedido a app_auth/,
+    ],
+    [
+      'app_user com USAGE no schema auth (mesmo sem GRANT de tabela)',
+      'GRANT USAGE ON SCHEMA auth TO app_user',
+      /app_user tem USAGE no schema auth/,
+    ],
+    [
+      'PUBLIC com USAGE no schema auth',
+      'GRANT USAGE ON SCHEMA auth TO PUBLIC',
+      /schema auth: USAGE para PUBLIC/,
+    ],
+    [
+      'app_auth com USAGE no schema app (mesmo sem GRANT de tabela)',
+      'GRANT USAGE ON SCHEMA app TO app_auth',
+      /app_auth tem USAGE no schema app/,
     ],
     [
       'tabela de auth de outro dono',

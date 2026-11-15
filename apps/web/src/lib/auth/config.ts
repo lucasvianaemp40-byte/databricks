@@ -30,9 +30,24 @@ export class AuthNotAllowedInProductionError extends Error {
   }
 }
 
-/** Trava de produção (threat model A1). */
-export function assertAuthAllowed(appEnv: string): void {
-  if (appEnv === 'production') {
+/** Ambientes em que esta entrega pode rodar: lista fechada (o resto, inclusive o desconhecido, não). */
+const AUTH_ALLOWED_APP_ENVS: ReadonlySet<string> = new Set([
+  'development',
+  'test',
+  'e2e',
+  'preview',
+]);
+
+/**
+ * Trava de produção (threat model A1), falhando fechado. Recebe o APP_ENV CRU (antes do
+ * padrão "development" da validação): um build de produção (`NODE_ENV=production`) sem
+ * APP_ENV explícito é tratado como produção, não como desenvolvimento.
+ */
+export function assertAuthAllowed(appEnv: string | undefined, nodeEnv: string): void {
+  const explicit = appEnv === undefined || appEnv === '' ? undefined : appEnv;
+  const allowed =
+    explicit === undefined ? nodeEnv !== 'production' : AUTH_ALLOWED_APP_ENVS.has(explicit);
+  if (!allowed) {
     throw new AuthNotAllowedInProductionError();
   }
 }

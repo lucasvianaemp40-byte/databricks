@@ -43,7 +43,9 @@ const instances = globalThis as typeof globalThis & {
 };
 
 function configuration() {
-  assertAuthAllowed(env.APP_ENV);
+  // APP_ENV cru: sem ele, a validação assume "development", e um deploy de produção que
+  // esquecesse a variável escaparia da trava.
+  assertAuthAllowed(process.env.APP_ENV, env.NODE_ENV);
   const { DATABASE_URL, AUTH_DATABASE_URL, BETTER_AUTH_SECRET } = env;
   if (
     DATABASE_URL === undefined ||

@@ -2,7 +2,8 @@
 
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { authErrorMessage } from '../../lib/auth/messages';
+import { authErrorMessage, TOO_MANY_ATTEMPTS } from '../../lib/auth/messages';
+import { authLimits, clientIp } from '../../lib/auth/rate-limit';
 import { getAuth } from '../../lib/auth/server';
 import { signInSchema } from '../../lib/auth/validation';
 import { echoValues, type FormState, readFields } from '../../lib/form-state';
@@ -22,8 +23,15 @@ export async function signInAction(
     // Mesma mensagem do erro de credencial: o formato não vira pista (threat model A8).
     return { message: authErrorMessage(undefined, 'sign-in'), values };
   }
+  const requestHeaders = await headers();
+  // Os dois contam sempre (sem curto-circuito): por IP e por e-mail (threat model A2).
+  const ipAllowed = authLimits.signInByIp.hit(`ip:${clientIp(requestHeaders)}`);
+  const emailAllowed = authLimits.signInByEmail.hit(`email:${parsed.data.email}`);
+  if (!ipAllowed || !emailAllowed) {
+    return { message: TOO_MANY_ATTEMPTS, values };
+  }
   try {
-    await getAuth().api.signInEmail({ body: parsed.data, headers: await headers() });
+    await getAuth().api.signInEmail({ body: parsed.data, headers: requestHeaders });
   } catch (error) {
     return { message: authErrorMessage(error, 'sign-in'), values };
   }
