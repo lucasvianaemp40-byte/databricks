@@ -178,6 +178,14 @@ describe('schema auth (Better Auth) e papel app_auth', () => {
       expect(await captureSqlState(auth.query(member, [ids?.org_id, ids?.user_id]))).toBe(
         PG_ERROR.uniqueViolation,
       );
+      // Um salão por conta nesta entrega: o mesmo usuário em OUTRA organização também é
+      // recusado (envios simultâneos de "criar salão" não deixam dois salões; pentest).
+      const { rows: other } = await auth.query<{ id: string }>(
+        `INSERT INTO organization (name, slug, "createdAt") VALUES ('Outro', 'outro-salao-auth', now()) RETURNING id`,
+      );
+      expect(await captureSqlState(auth.query(member, [other[0]?.id, ids?.user_id]))).toBe(
+        PG_ERROR.uniqueViolation,
+      );
       const account = `INSERT INTO account ("accountId", "providerId", "userId", "updatedAt") VALUES ($1::text, 'credential', $2::uuid, now())`;
       await auth.query(account, [ids?.user_id, ids?.user_id]);
       expect(await captureSqlState(auth.query(account, [ids?.user_id, ids?.user_id]))).toBe(

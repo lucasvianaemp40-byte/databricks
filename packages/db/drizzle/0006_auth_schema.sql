@@ -118,6 +118,12 @@ CREATE INDEX "invitation_email_idx" ON auth."invitation" ("email");
 -- garante sob concorrência (dois cliques em "criar salão" ou no aceite de convite).
 CREATE UNIQUE INDEX "member_organizationId_userId_key" ON auth."member" ("organizationId", "userId");
 --> statement-breakpoint
+-- Um salão por conta nesta entrega (organizationLimit: 1). O Better Auth só conta antes de
+-- gravar, sem transação: envios simultâneos de "criar salão" deixavam a conta com dois salões
+-- (pentest). O banco garante. Quando uma conta puder ter mais de um salão (equipe em dois
+-- salões, rede), uma migração nova troca este índice pela regra nova.
+CREATE UNIQUE INDEX "member_userId_key" ON auth."member" ("userId");
+--> statement-breakpoint
 -- Uma conta por (provedor, id no provedor): duas vinculações simultâneas não duplicam. Feito
 -- com a tabela vazia, porque o runner não aceita CONCURRENTLY.
 CREATE UNIQUE INDEX "account_providerId_accountId_key" ON auth."account" ("providerId", "accountId");

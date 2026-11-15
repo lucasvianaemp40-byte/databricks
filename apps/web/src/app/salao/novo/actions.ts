@@ -62,10 +62,20 @@ export async function createSalonAction(
         headers: requestHeaders,
       }));
   } catch (error) {
-    const message = authErrorMessage(error, 'create-salon');
-    return message === SLUG_TAKEN_ERROR
-      ? { fieldErrors: { slug: message }, values }
-      : { message, values };
+    // Envio simultâneo da mesma conta: o banco recusa o segundo vínculo (um salão por conta),
+    // e quem perdeu retoma o salão que o outro envio criou. A organização sem membro que o
+    // Better Auth deixa para trás fica com o endereço reservado até a limpeza (pendência).
+    const winner = await auth.api
+      .listOrganizations({ headers: requestHeaders })
+      .then((list) => list[0])
+      .catch(() => undefined);
+    if (winner === undefined) {
+      const message = authErrorMessage(error, 'create-salon');
+      return message === SLUG_TAKEN_ERROR
+        ? { fieldErrors: { slug: message }, values }
+        : { message, values };
+    }
+    organization = winner;
   }
 
   try {

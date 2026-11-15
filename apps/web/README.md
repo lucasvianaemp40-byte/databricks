@@ -101,11 +101,14 @@ Threat model: [`2026-10-30-conta-e-salao.md`](../../docs/seguranca/threat-models
   zod estrito na frente e a checagem de `Origin` do Next. Menos superfície: nenhum endpoint
   do Better Auth (convites, troca de organização...) fica exposto. Consequência: o limite de
   tentativas do Better Auth (que só roda no roteador HTTP) não vale para chamadas diretas.
-- **Limite de tentativas provisório** (`lib/auth/rate-limit.ts`): janela deslizante em memória,
-  login por e-mail (10 em 15 min) e por IP (30 em 15 min), cadastro por IP (30 por hora);
-  recusada também conta. Vale por processo, e o IP vem de `x-real-ip`/`x-forwarded-for`, que
-  só valem atrás de um proxy que os sobrescreva (sem ele, o limite por IP é contornável; o
-  por e-mail não). O limite em banco e o Turnstile vêm na 2ª entrega.
+- **Limite de tentativas provisório** (`lib/auth/rate-limit.ts`): janela deslizante em memória.
+  Login: por IP (30 em 15 min), por (e-mail, IP) (10 em 15 min, para não trancar a vítima em
+  outro IP) e teto global por e-mail (50 em 15 min, contra ataque distribuído), em ordem e com
+  curto-circuito; cadastro por IP (30 por hora). Recusada também conta, e com a memória cheia a
+  chave nova é recusada (nenhuma vigente é despejada). Vale por processo, e o IP vem de
+  `x-real-ip`/`x-forwarded-for`, que só valem atrás de um proxy que os reescreva (a Vercel faz
+  isso; fora dela, valem só os limites por e-mail). O limite em banco e o Turnstile vêm na 2ª
+  entrega.
 - **Cookie** `__Host-salao.session_token`: `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, sem
   `Domain` (o E2E confere todo `Set-Cookie`); sem cache de sessão no cookie; IP não guardado.
 - **DAL** (`lib/auth/dal.ts`): o tenant vem só da sessão e o vínculo usuário × salão é

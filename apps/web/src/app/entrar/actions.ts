@@ -3,7 +3,7 @@
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { authErrorMessage, TOO_MANY_ATTEMPTS } from '../../lib/auth/messages';
-import { authLimits, clientIp } from '../../lib/auth/rate-limit';
+import { allowSignIn, authLimits, clientIp } from '../../lib/auth/rate-limit';
 import { getAuth } from '../../lib/auth/server';
 import { signInSchema } from '../../lib/auth/validation';
 import { echoValues, type FormState, readFields } from '../../lib/form-state';
@@ -24,10 +24,8 @@ export async function signInAction(
     return { message: authErrorMessage(undefined, 'sign-in'), values };
   }
   const requestHeaders = await headers();
-  // Os dois contam sempre (sem curto-circuito): por IP e por e-mail (threat model A2).
-  const ipAllowed = authLimits.signInByIp.hit(`ip:${clientIp(requestHeaders)}`);
-  const emailAllowed = authLimits.signInByEmail.hit(`email:${parsed.data.email}`);
-  if (!ipAllowed || !emailAllowed) {
+  // Por IP, por (e-mail, IP) e teto global por e-mail (threat model A2).
+  if (!allowSignIn(authLimits, parsed.data.email, clientIp(requestHeaders))) {
     return { message: TOO_MANY_ATTEMPTS, values };
   }
   try {
