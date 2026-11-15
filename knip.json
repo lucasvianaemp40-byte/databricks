@@ -11,7 +11,11 @@
         ".claude/hooks/test/**/*.test.mjs"
       ]
     },
-    "apps/web": {},
+    "apps/web": {
+      "entry": [
+        "scripts/*.mjs"
+      ]
+    },
     "packages/*": {}
   }
 }

@@ -9,6 +9,7 @@ import {
   mapDatabaseError,
   SlotUnavailableError,
   TenantIsolationError,
+  TenantSlugTakenError,
   TransactionConflictError,
 } from './errors';
 
@@ -79,6 +80,8 @@ describe('mapDatabaseError', () => {
     // A PK `id` é global: colidir com o id de outro tenant não pode virar "já existe".
     ['23505', 'customers_pkey', IdentifierConflictError, 'IDENTIFIER_CONFLICT'],
     ['23505', 'appointment_events_pkey', IdentifierConflictError, 'IDENTIFIER_CONFLICT'],
+    // O slug é público (URL da página de agendamento): dizer que está em uso não vaza nada.
+    ['23505', 'tenants_slug_key', TenantSlugTakenError, 'TENANT_SLUG_TAKEN'],
     // Transitórios: o PostgreSQL abortou a transação para resolver um conflito com outra.
     ['40P01', undefined, TransactionConflictError, 'TRANSACTION_CONFLICT'],
     ['40001', undefined, TransactionConflictError, 'TRANSACTION_CONFLICT'],

@@ -13,6 +13,16 @@ export function connectAsWorker(max = 2): Database {
   return createDb(inject('appWorkerDatabaseUrl'), { max, applicationName: 'salon-test-worker' });
 }
 
+/** Banco como app_auth (papel do Better Auth), com search_path=auth como no app. */
+export function connectAsAuth(max = 2): pg.Pool {
+  return new pg.Pool({
+    connectionString: inject('appAuthDatabaseUrl'),
+    max,
+    application_name: 'salon-test-auth',
+    options: '-c search_path=auth',
+  });
+}
+
 /** Pool de superusuário do banco de teste: catálogo e operações fora da aplicação. */
 export function connectAsAdmin(max = 2): pg.Pool {
   return new pg.Pool({

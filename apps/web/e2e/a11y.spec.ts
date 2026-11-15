@@ -16,6 +16,8 @@ function summarize(violations: readonly AxeViolation[]): string[] {
 
 const PAGES = [
   { name: 'página inicial', path: '/', status: 200, allowedConsoleErrors: [] },
+  { name: 'criar conta', path: '/cadastro', status: 200, allowedConsoleErrors: [] },
+  { name: 'entrar', path: '/entrar', status: 200, allowedConsoleErrors: [] },
   {
     name: 'página não encontrada',
     path: MISSING_PAGE_PATH,

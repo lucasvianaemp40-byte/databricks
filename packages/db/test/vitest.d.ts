@@ -8,6 +8,8 @@ declare module 'vitest' {
     appUserDatabaseUrl: string;
     /** Mesmo banco como app_worker (papel dos jobs). */
     appWorkerDatabaseUrl: string;
+    /** Mesmo banco como app_auth (Better Auth: só o schema auth), com search_path=auth. */
+    appAuthDatabaseUrl: string;
     /** TEST_DATABASE_URL original: para criar bancos de rascunho (testes do runner). */
     maintenanceDatabaseUrl: string;
   }

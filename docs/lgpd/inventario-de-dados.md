@@ -126,11 +126,42 @@ com a eliminação. Como a tabela guarda só IDs e transições, a anonimizaçã
 `customers`) basta para desvincular a pessoa. A eliminação total de um tenant exige um
 procedimento privilegiado dedicado, ainda pendente (ver [retenção](retencao.md)).
 
+## Schema `auth` (Better Auth, 1ª entrega do ADR-0004)
+
+Migração [`0006_auth_schema.sql`](../../packages/db/drizzle/0006_auth_schema.sql). São dados de
+conta e de acesso dos **usuários da plataforma** (dono e, depois, a equipe): a **plataforma é
+controladora**, não o salão. Só o papel `app_auth` lê e grava (o `app_user` não tem nem USAGE
+no schema). Threat model: [2026-10-30-conta-e-salao](../seguranca/threat-models/2026-10-30-conta-e-salao.md).
+
+| Tabela | Colunas pessoais | Finalidade | Base sugerida | Retenção (proposta, a validar com jurídico) |
+|---|---|---|---|---|
+| `user` | `name`, `email`, `emailVerified`; `image` existe no formato do Better Auth e **não é preenchida** | identificar a conta, contato da conta | art. 7º, V | enquanto a conta existir; exclusão da conta apaga em cascata `session` e `account` |
+| `account` | hash scrypt da senha (`password`); colunas de OAuth vazias (não há login social) | autenticação | art. 7º, V | junto com o `user` |
+| `session` | `token` (texto puro, formato do Better Auth), `userAgent`; `ipAddress` **não é gravado** (`disableIpTracking`, minimização) | manter a sessão | art. 7º, V | até expirar (7 dias); expurgo das vencidas é pendência |
+| `organization` | `name`, `slug` (igual a `app.tenants`, ver acima); `logo` e `metadata` não preenchidos | salão = tenant | art. 7º, V | enquanto o salão existir |
+| `member` | vínculo usuário × salão e papel | autorização | art. 7º, V | enquanto o vínculo existir |
+| `invitation` | e-mail de **terceiro** (convidado) | convites (E1.4, ainda sem uso) | a definir com jurídico | curta, com expurgo (pendência) |
+| `verification` | identificador (em geral o e-mail) e token | verificação de e-mail e recuperação de senha (2ª entrega, ainda sem uso) | art. 7º, V | até expirar; guardar com hash (`verification.storeIdentifier: "hashed"`, ADR-0004) |
+
+Pendências desta entrega, **a validar com jurídico** onde indicado:
+
+- **Registros de acesso (Marco Civil, art. 15: 6 meses).** A sessão não guarda IP; o registro
+  de acesso (data, hora e IP) fica nos logs de acesso da plataforma, com 6 meses e acesso
+  restrito ([ADR-0010](../adr/0010-observabilidade.md), implementação no T2). Confirmar que
+  isso basta. **A validar com jurídico.**
+- **Direitos do titular da conta** (art. 18): exportar e excluir a própria conta ainda não
+  existem; o caso do dono único que encerra o salão afeta dados dos clientes finais, de que o
+  salão é controlador (devolução antes de eliminar, art. 16). **A validar com jurídico.**
+- **Aceite de termos e da política de privacidade** com versão e data: ainda não há termos.
+  Precisa existir antes de abrir o cadastro ao público (a trava de produção impede antes
+  disso). **A validar com jurídico.**
+- **Expurgo** de sessões e verificações vencidas e de convites: job a criar (fila pg-boss).
+
 ## Planejado (próximas iterações)
 
 | Armazenamento | Dados pessoais | Controlador | Observação |
 |---|---|---|---|
-| Schema `auth` (Better Auth): `user`, `session`, `account`, `verification`, `twoFactor`, `passkey`, `organization`, `member`, `invitation`, `rateLimit` | e-mail, nome, hash de senha, segredo TOTP cifrado, chaves públicas de passkey, IP e user agent das sessões, OTP temporário | Plataforma | papel `app_auth`; tokens de verificação com hash |
+| Schema `auth`, tabelas da 2ª entrega: `twoFactor`, `passkey`, `rateLimit` | segredo TOTP cifrado, chaves públicas de passkey, contadores de tentativa | Plataforma | papel `app_auth`; backup codes cifrados |
 | Consentimentos (append-only) | finalidade, concedido ou revogado, versão do texto, canal, evidência | Salão | `whatsapp_transactional`, `whatsapp_marketing`, `email_marketing`, `health_data`, `image_use` |
 | Ficha técnica e anamnese | **dado de saúde** | Salão | criptografia de campo; ver [dados sensíveis](dados-sensiveis.md) |
 | Fotos de antes e depois | imagem | Salão | bucket privado; consentimento específico para portfólio |

@@ -12,14 +12,18 @@
     "typecheck": "next typegen && tsc",
     "lint": "eslint --max-warnings=0 .",
     "test": "vitest run",
-    "e2e": "playwright test"
+    "e2e": "../../scripts/with-local-postgres.sh node scripts/with-e2e-database.mjs playwright test"
   },
   "dependencies": {
+    "@salon/db": "workspace:*",
     "@salon/scheduling-core": "workspace:*",
     "@t3-oss/env-nextjs": "catalog:",
+    "better-auth": "catalog:",
     "next": "catalog:",
+    "pg": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
+    "server-only": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
@@ -28,6 +32,7 @@
     "@playwright/test": "catalog:",
     "@tailwindcss/postcss": "catalog:",
     "@types/node": "catalog:",
+    "@types/pg": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "eslint-plugin-react-hooks": "catalog:",

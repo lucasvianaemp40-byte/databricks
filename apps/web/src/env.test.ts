@@ -5,7 +5,28 @@ const EMPTY: RuntimeEnv = {
   APP_ENV: undefined,
   APP_URL: undefined,
   NODE_ENV: undefined,
+  DATABASE_URL: undefined,
+  AUTH_DATABASE_URL: undefined,
+  BETTER_AUTH_SECRET: undefined,
 };
+
+/** URL PostgreSQL de teste com usuário e senha montados (sem credencial literal no código). */
+function pgUrl(user: string, protocol = 'postgresql:'): string {
+  const url = new URL('postgresql://127.0.0.1:5432/app');
+  url.username = user;
+  url.password = 'nao-e-segredo';
+  return url.href.replace(/^postgresql:/, protocol);
+}
+
+/** As três variáveis da autenticação, válidas. */
+function authEnv(overrides: Partial<RuntimeEnv> = {}): Partial<RuntimeEnv> {
+  return {
+    DATABASE_URL: pgUrl('app_user'),
+    AUTH_DATABASE_URL: pgUrl('app_auth'),
+    BETTER_AUTH_SECRET: 'x'.repeat(32),
+    ...overrides,
+  };
+}
 
 /** Monta a URL com usuário e senha sem deixar uma credencial literal no código. */
 function urlWithCredentials(origin: string): string {
@@ -129,5 +150,67 @@ describe('createAppEnv (cliente)', () => {
     expect(() =>
       createAppEnv({ ...EMPTY, APP_ENV: 'invalido', APP_URL: 'invalida' }, { isServer: false }),
     ).not.toThrow();
+  });
+});
+
+describe('createAppEnv: banco e autenticação', () => {
+  it('são opcionais: sem nenhuma das três o app sobe (landing e health não usam banco)', () => {
+    const env = serverEnv({});
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.AUTH_DATABASE_URL).toBeUndefined();
+    expect(env.BETTER_AUTH_SECRET).toBeUndefined();
+  });
+
+  it('aceita as três juntas (postgres:// ou postgresql://)', () => {
+    const env = serverEnv(authEnv({ AUTH_DATABASE_URL: pgUrl('app_auth', 'postgres:') }));
+    expect(env.DATABASE_URL).toBe(pgUrl('app_user'));
+    expect(env.BETTER_AUTH_SECRET).toHaveLength(32);
+  });
+
+  it.each([
+    ['só o banco da aplicação', { AUTH_DATABASE_URL: undefined, BETTER_AUTH_SECRET: undefined }],
+    ['sem o segredo', { BETTER_AUTH_SECRET: undefined }],
+    ['sem o banco da autenticação', { AUTH_DATABASE_URL: undefined }],
+  ])('recusa configuração pela metade: %s', (_label, override) => {
+    expect(() => serverEnv(authEnv(override))).toThrow(
+      /defina DATABASE_URL, AUTH_DATABASE_URL e BETTER_AUTH_SECRET juntas/,
+    );
+  });
+
+  it.each([
+    ['DATABASE_URL', { DATABASE_URL: pgUrl('app_user', 'mysql:') }],
+    ['AUTH_DATABASE_URL', { AUTH_DATABASE_URL: 'nao-e-url' }],
+  ])(
+    '%s precisa ser URL PostgreSQL, e o erro não ecoa o valor (tem senha)',
+    (variable, override) => {
+      try {
+        serverEnv(authEnv(override));
+        expect.unreachable('deveria recusar');
+      } catch (error) {
+        expect(error).toBeInstanceOf(InvalidEnvironmentError);
+        const { message } = error as InvalidEnvironmentError;
+        expect(message).toContain(variable);
+        expect(message).not.toContain('nao-e-segredo');
+        expect(message).not.toContain('nao-e-url');
+      }
+    },
+  );
+
+  it('BETTER_AUTH_SECRET precisa de pelo menos 32 caracteres, sem ecoar o valor', () => {
+    const short = 'segredo-curto-demais';
+    try {
+      serverEnv(authEnv({ BETTER_AUTH_SECRET: short }));
+      expect.unreachable('deveria recusar');
+    } catch (error) {
+      const { message } = error as InvalidEnvironmentError;
+      expect(message).toContain('BETTER_AUTH_SECRET');
+      expect(message).not.toContain(short);
+    }
+  });
+
+  it('o banco da aplicação e o da autenticação usam papéis diferentes (app_user ≠ app_auth)', () => {
+    expect(() => serverEnv(authEnv({ AUTH_DATABASE_URL: pgUrl('app_user') }))).toThrow(
+      /AUTH_DATABASE_URL.*outro papel/,
+    );
   });
 });

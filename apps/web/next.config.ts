@@ -14,7 +14,7 @@ const nextConfig: NextConfig = {
   typedRoutes: true,
   // Pacotes internos exportam o fonte TypeScript, sem build próprio. O Turbopack já transpila
   // pacotes do workspace; a lista explícita mantém o comportamento se o build usar webpack.
-  transpilePackages: ['@salon/scheduling-core'],
+  transpilePackages: ['@salon/scheduling-core', '@salon/db'],
   // Otimizador de imagens DESLIGADO enquanto o app não usa next/image: /_next/image responde
   // 404 e o sharp/libvips sai do caminho das requisições (alvo de advisories de SSRF, DoS e
   // RCE via decodificadores). `remotePatterns: []` não bastava: já é o padrão do Next e o

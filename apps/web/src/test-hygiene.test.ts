@@ -330,6 +330,7 @@ type SpecProjects = Record<string, readonly string[]>;
 // efeito colateral de um testIgnore. Com build local, todo spec roda em algum projeto.
 const SPEC_PROJECTS_LOCAL: SpecProjects = {
   'a11y.spec.ts': ['chromium', 'mobile'],
+  'auth.spec.ts': ['chromium', 'mobile'],
   'console-guard.spec.ts': ['chromium'],
   'home.spec.ts': ['chromium', 'mobile'],
   'runtime-env.spec.ts': ['chromium'],
