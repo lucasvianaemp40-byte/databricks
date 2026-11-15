@@ -140,6 +140,22 @@ export class IdempotencyKeyConflictError extends DatabaseConstraintError {
 }
 
 /**
+ * 23505 em `tenants_slug_key`: o endereço público do salão já é de outro salão. O slug é
+ * público (URL da página de agendamento), então dizer que está em uso não vaza nada.
+ * HTTP sugerido: 409 pedindo outro endereço.
+ */
+export class TenantSlugTakenError extends DatabaseConstraintError {
+  constructor(constraint: string | undefined, cause: unknown) {
+    super('Este endereço já está em uso por outro salão.', {
+      code: 'TENANT_SLUG_TAKEN',
+      sqlState: PG_ERROR.uniqueViolation,
+      constraint,
+      cause,
+    });
+  }
+}
+
+/**
  * 23505 na PK `id` (`<tabela>_pkey`). A PK é GLOBAL (não começa por `tenant_id`): um id que
  * já existe em OUTRO tenant também colide, mesmo invisível pela RLS. Nunca responda "já
  * existe" (seria um oráculo de existência entre tenants): trate como erro genérico (HTTP 404
@@ -178,6 +194,7 @@ const STATUS_TRANSITION_CONSTRAINTS: ReadonlySet<string> = new Set([
   'appointments_initial_status',
 ]);
 const IDEMPOTENCY_CONSTRAINT = 'appointments_tenant_idempotency_key_key';
+const TENANT_SLUG_CONSTRAINT = 'tenants_slug_key';
 const PRIMARY_KEY_SUFFIX = '_pkey';
 
 /**
@@ -208,6 +225,9 @@ export function mapDatabaseError(error: unknown): unknown {
     case PG_ERROR.uniqueViolation:
       if (pgError.constraint === IDEMPOTENCY_CONSTRAINT) {
         return new IdempotencyKeyConflictError(pgError.constraint, error);
+      }
+      if (pgError.constraint === TENANT_SLUG_CONSTRAINT) {
+        return new TenantSlugTakenError(pgError.constraint, error);
       }
       return pgError.constraint?.endsWith(PRIMARY_KEY_SUFFIX) === true
         ? new IdentifierConflictError(pgError.constraint, error)

@@ -44,14 +44,24 @@ describe('loadMigrations', () => {
     );
   });
 
-  it('só a migração de bootstrap (papéis e extensão) roda com o usuário da conexão', () => {
-    const privileged = loadMigrations()
-      .filter((migration) => migration.privileged)
-      .map((migration) => migration.tag);
-    expect(privileged).toEqual(['0000_bootstrap_roles_extensions']);
-    expect(
-      readFileSync(join(DEFAULT_MIGRATIONS_FOLDER, '0000_bootstrap_roles_extensions.sql'), 'utf8'),
-    ).toMatch(new RegExp(`^${PRIVILEGED_MIGRATION_MARKER}\\n`));
+  it('só as migrações de papéis e extensão rodam com o usuário da conexão, sem criar objetos', () => {
+    const privileged = loadMigrations().filter((migration) => migration.privileged);
+    // Lista fechada: migração privilegiada nova exige revisão (roda fora do app_migrator).
+    expect(privileged.map((migration) => migration.tag)).toEqual([
+      '0000_bootstrap_roles_extensions',
+      '0005_auth_role',
+    ]);
+    for (const migration of privileged) {
+      expect(readFileSync(join(DEFAULT_MIGRATIONS_FOLDER, `${migration.tag}.sql`), 'utf8')).toMatch(
+        new RegExp(`^${PRIVILEGED_MIGRATION_MARKER}\\n`),
+      );
+      // Objeto criado aqui seria do usuário da conexão, não do app_migrator.
+      const sql = migration.statements.join('\n').replaceAll(/--[^\n]*/g, '');
+      expect(sql, migration.tag).not.toMatch(/CREATE\s+OR\s+REPLACE\b/i);
+      expect(sql, migration.tag).not.toMatch(
+        /CREATE\s+(?:TABLE|SCHEMA|FUNCTION|PROCEDURE|VIEW|INDEX|TYPE|SEQUENCE|TRIGGER)\b/i,
+      );
+    }
   });
 
   it('nenhuma migração usa recursos exclusivos do PostgreSQL 17/18 (alvo: 16 e 18)', () => {

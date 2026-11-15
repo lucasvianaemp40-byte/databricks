@@ -14,6 +14,14 @@
 export { type CreateDbOptions, createDb, type Database, type Schema } from './client';
 export * from './errors';
 export { isUuid, newId } from './ids';
+export {
+  type CreatedTenant,
+  createTenantWithFirstLocation,
+  getTenantSummary,
+  type NewTenantInput,
+  TenantOnboardingConflictError,
+  type TenantSummary,
+} from './onboarding';
 export * from './schema';
 export * from './schema/values';
 export {
