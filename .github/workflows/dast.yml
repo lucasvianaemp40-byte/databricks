@@ -44,6 +44,25 @@ jobs:
       # "Variáveis de ambiente" em apps/web/README.md.
       APP_ENV: preview
       APP_URL: http://127.0.0.1:3000
+      # Banco descartável para as telas de conta e salão (sem ele, /entrar e /cadastro
+      # responderiam 500). O wrapper do E2E cria o banco, migra e sobe o app como
+      # app_user/app_auth; o app não recebe a URL de superusuário.
+      TEST_DATABASE_URL: postgresql://postgres:ci_only_not_a_secret@localhost:5432/app_test
+    services:
+      postgres:
+        image: postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_only_not_a_secret
+          POSTGRES_DB: app_test
+          TZ: UTC
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d app_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,7 +72,8 @@ jobs:
         run: pnpm build
       - name: Subir o app (next start) em segundo plano
         run: |
-          nohup pnpm --filter @salon/web run start --port 3000 --hostname 127.0.0.1 \
+          nohup node apps/web/scripts/with-e2e-database.mjs \
+            pnpm --filter @salon/web run start --port 3000 --hostname 127.0.0.1 \
             >"${RUNNER_TEMP}/app.log" 2>&1 &
           for _ in $(seq 1 60); do
             if curl -fsS -o /dev/null http://127.0.0.1:3000/api/health; then
